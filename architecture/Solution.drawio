@@ -1,0 +1,77 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="jR4r4g6o1BL5WQCQ5INX">
+    <mxGraphModel dx="2241" dy="915" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="izzgbUnmiLxN2v1YjYak-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;Drone&lt;/div&gt;" vertex="1">
+          <mxGeometry height="400" width="690" x="-40" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-8" edge="1" parent="1" source="izzgbUnmiLxN2v1YjYak-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;" target="izzgbUnmiLxN2v1YjYak-4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-9" connectable="0" parent="izzgbUnmiLxN2v1YjYak-8" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];inheritText=1;defaultLabelBackgroundColor=page;" value="Telem coupé" vertex="1">
+          <mxGeometry relative="1" x="-0.0122" y="3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="&lt;div&gt;RaspberryPi&lt;/div&gt;(Confirmation cible, reconnaissance image)&amp;nbsp;" vertex="1">
+          <mxGeometry height="80" width="190" x="190" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-6" edge="1" parent="1" source="izzgbUnmiLxN2v1YjYak-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;" target="izzgbUnmiLxN2v1YjYak-2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-7" connectable="0" parent="izzgbUnmiLxN2v1YjYak-6" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];inheritText=1;defaultLabelBackgroundColor=page;" value="USB" vertex="1">
+          <mxGeometry relative="1" x="-0.0767" y="2" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="FPGA&lt;br&gt;&lt;div&gt;(Detection amplitude+sonograme)&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="180" x="-30" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="ECU&lt;br&gt;FC&lt;br&gt;Antennas" vertex="1">
+          <mxGeometry height="80" width="170" x="420" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-11" edge="1" parent="1" source="izzgbUnmiLxN2v1YjYak-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="izzgbUnmiLxN2v1YjYak-3">
+          <mxGeometry relative="1" x="0.0022" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-12" connectable="0" parent="izzgbUnmiLxN2v1YjYak-11" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];inheritText=1;defaultLabelBackgroundColor=page;" value="&lt;div&gt;Tout le temps alimenté&lt;/div&gt;" vertex="1">
+          <mxGeometry relative="1" x="-0.2903" y="-3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-10" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Batterie" vertex="1">
+          <mxGeometry height="60" width="120" x="255" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-16" edge="1" parent="1" source="izzgbUnmiLxN2v1YjYak-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.569;entryY=0.073;entryDx=0;entryDy=0;entryPerimeter=0;defaultLabelBackgroundColor=page;" target="izzgbUnmiLxN2v1YjYak-15">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-15" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="&lt;div&gt;PCB&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="120" width="240" x="360" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-18" edge="1" parent="1" source="izzgbUnmiLxN2v1YjYak-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.75;entryY=0;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;" target="izzgbUnmiLxN2v1YjYak-2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-19" connectable="0" parent="izzgbUnmiLxN2v1YjYak-18" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];inheritText=1;defaultLabelBackgroundColor=page;" value="Trigé par FPGA" vertex="1">
+          <mxGeometry relative="1" x="0.3683" y="1" as="geometry">
+            <mxPoint x="28" y="-6" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-20" edge="1" parent="1" source="izzgbUnmiLxN2v1YjYak-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.75;entryY=0;entryDx=0;entryDy=0;defaultLabelBackgroundColor=page;" target="izzgbUnmiLxN2v1YjYak-4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-21" connectable="0" parent="izzgbUnmiLxN2v1YjYak-20" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];inheritText=1;defaultLabelBackgroundColor=page;" value="Trigé par RbPi" vertex="1">
+          <mxGeometry relative="1" x="0.0962" y="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-13" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Convertisseur&lt;br&gt;(divider)" vertex="1">
+          <mxGeometry height="60" width="120" x="360" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="izzgbUnmiLxN2v1YjYak-17" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Redirection alim" vertex="1">
+          <mxGeometry height="60" width="120" x="480" y="240" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
