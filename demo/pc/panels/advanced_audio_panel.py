@@ -11,10 +11,9 @@ from demo.pc.state import AppState
 def render(state: AppState) -> None:
     st.subheader("Advanced audio")
     samples = state.get_audio(config.MEL_SECONDS)
-
-    if samples.size < config.MEL_N_FFT:
-        st.info("Waiting for RTP audio stream...")
-    else:
+    figure, axis = plt.subplots(figsize=(6.0, 2.6))
+    result = None
+    if samples.size >= config.MEL_N_FFT:
         result = compute_mel_spectrogram(
             samples,
             sample_rate=config.AUDIO_RATE,
@@ -25,25 +24,44 @@ def render(state: AppState) -> None:
             fmax=config.MEL_FMAX,
         )
 
-        if result is None:
-            st.info("Not enough audio data for a spectrogram yet.")
-        else:
-            times, frequencies, spectrogram_db = result
-            figure, axis = plt.subplots(figsize=(6.0, 2.6))
-            mesh = axis.pcolormesh(
-                times,
-                frequencies,
-                spectrogram_db,
-                shading="auto",
-                cmap="magma",
-            )
-            axis.set_xlabel("Time (s)")
-            axis.set_ylabel("Frequency (Hz)")
-            axis.set_ylim(0.0, config.MEL_FMAX)
-            figure.colorbar(mesh, ax=axis, format="%+2.0f dB", pad=0.02)
-            figure.tight_layout()
-            st.pyplot(figure, width="stretch")
-            plt.close(figure)
+    if result is None:
+        axis.set_xlim(0.0, config.MEL_SECONDS)
+        axis.set_ylim(0.0, config.MEL_FMAX)
+        axis.text(
+            0.5,
+            0.5,
+            "Waiting for audio stream...",
+            transform=axis.transAxes,
+            ha="center",
+            va="center",
+            alpha=0.7,
+        )
+        mesh = axis.pcolormesh(
+            [[0.0, config.MEL_SECONDS], [0.0, config.MEL_SECONDS]],
+            [[0.0, 0.0], [config.MEL_FMAX, config.MEL_FMAX]],
+            [[-80.0, -80.0], [-80.0, -80.0]],
+            shading="auto",
+            cmap="magma",
+            vmin=-80.0,
+            vmax=0.0,
+        )
+    else:
+        times, frequencies, spectrogram_db = result
+        mesh = axis.pcolormesh(
+            times,
+            frequencies,
+            spectrogram_db,
+            shading="auto",
+            cmap="magma",
+        )
+
+    axis.set_xlabel("Time (s)")
+    axis.set_ylabel("Frequency (Hz)")
+    axis.set_ylim(0.0, config.MEL_FMAX)
+    figure.colorbar(mesh, ax=axis, format="%+2.0f dB", pad=0.02)
+    figure.tight_layout()
+    st.pyplot(figure, width="stretch")
+    plt.close(figure)
 
     with st.container(border=True):
         st.caption("Model info here")

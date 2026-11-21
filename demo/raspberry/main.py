@@ -11,7 +11,7 @@ if __package__ in (None, ""):
 
 from demo import config
 from demo.common.control import ControlServer
-from demo.raspberry.rtp_sender import RtpSender
+from demo.raspberry.gst_sender import GstSender
 
 
 def _on_command(command: str) -> dict[str, object]:
@@ -19,17 +19,15 @@ def _on_command(command: str) -> dict[str, object]:
     return {"ok": True}
 
 
-def _print_sender_failure(sender: RtpSender) -> None:
-    if sender.video is not None and not sender.video.is_running:
-        print("Video sender stopped. FFmpeg log:", flush=True)
-        print(sender.video.log_tail(), flush=True)
-    if sender.audio is not None and not sender.audio.is_running:
-        print("Audio sender stopped. FFmpeg log:", flush=True)
-        print(sender.audio.log_tail(), flush=True)
+def _print_sender_failure(sender: GstSender) -> None:
+    if sender.video is not None and sender.video.error:
+        print(f"Video sender error: {sender.video.error}", flush=True)
+    if sender.audio is not None and sender.audio.error:
+        print(f"Audio sender error: {sender.audio.error}", flush=True)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Raspberry drone-side RTP simulation")
+    parser = argparse.ArgumentParser(description="Raspberry drone-side GStreamer sender")
     parser.add_argument(
         "--fake",
         action="store_true",
@@ -45,26 +43,18 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    sender = RtpSender(fake=args.fake)
+    sender = GstSender(fake=args.fake)
     control_server = ControlServer(
         config.RBP_BIND_HOST, config.CONTROL_PORT, _on_command
     )
 
     try:
         print(
-            f"Starting RTP senders ({'synthetic' if args.fake else 'hardware'})",
+            f"Starting GStreamer senders ({'synthetic' if args.fake else 'hardware'})",
             flush=True,
         )
-        video_source = (
-            "lavfi:testsrc2"
-            if args.fake
-            else f"{config.VIDEO_INPUT_FORMAT}:{config.VIDEO_DEVICE}"
-        )
-        audio_source = (
-            "lavfi:sine"
-            if args.fake
-            else f"{config.AUDIO_INPUT_FORMAT}:{config.AUDIO_DEVICE}"
-        )
+        video_source = "videotestsrc" if args.fake else config.VIDEO_DEVICE
+        audio_source = "audiotestsrc" if args.fake else config.AUDIO_DEVICE
         print(
             f"Video: {video_source} -> rtp://{config.PC_HOST}:{config.VIDEO_RTP_PORT}",
             flush=True,
@@ -75,8 +65,8 @@ def main() -> int:
         )
         try:
             sender.start()
-        except OSError as exc:
-            print(f"Failed to start FFmpeg senders: {exc}", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Failed to start GStreamer senders: {exc}", flush=True)
             return 1
         try:
             control_server.start()
@@ -90,9 +80,7 @@ def main() -> int:
             f"Control server listening on {config.RBP_BIND_HOST}:{config.CONTROL_PORT}",
             flush=True,
         )
-        if not status["video_sdp"] or not status["audio_sdp"]:
-            print("Warning: one or more SDP files were not created.", flush=True)
-            _print_sender_failure(sender)
+        _print_sender_failure(sender)
         print("Raspberry simulation ready. Press Ctrl+C to stop.", flush=True)
 
         while not stop_event.wait(0.5):

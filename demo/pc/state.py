@@ -13,7 +13,7 @@ from demo.common.ring_buffer import AudioRingBuffer
 class AppState:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._latest_frame: np.ndarray | None = None
+        self._latest_frame: bytes | None = None
         self._last_frame_time = 0.0
         self._last_audio_time = 0.0
         self._audio = AudioRingBuffer(config.AUDIO_BUFFER_SAMPLES)
@@ -21,12 +21,12 @@ class AppState:
         self.last_response: dict[str, Any] | None = None
         self.last_error = ""
 
-    def set_frame(self, frame: np.ndarray) -> None:
+    def set_frame(self, frame: bytes) -> None:
         with self._lock:
             self._latest_frame = frame
             self._last_frame_time = time.monotonic()
 
-    def get_frame(self) -> np.ndarray | None:
+    def get_frame(self) -> bytes | None:
         with self._lock:
             return self._latest_frame
 
