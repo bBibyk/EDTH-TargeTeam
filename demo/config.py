@@ -9,6 +9,10 @@ RUNTIME_DIR = Path(os.getenv("DEMO_RUNTIME_DIR", str(DEMO_DIR / "runtime")))
 
 GST_VIDEO_LOG_PATH = RUNTIME_DIR / "gst_video.log"
 GST_AUDIO_LOG_PATH = RUNTIME_DIR / "gst_audio.log"
+_yolo_model = os.getenv("YOLO_MODEL_PATH", str(ROOT_DIR / "models" / "vision" / "yolo26n.pt"))
+YOLO_MODEL_PATH = Path(_yolo_model)
+if not YOLO_MODEL_PATH.is_absolute():
+    YOLO_MODEL_PATH = ROOT_DIR / YOLO_MODEL_PATH
 
 
 def _env_int(name: str, default: int) -> int:
@@ -28,6 +32,7 @@ CONTROL_PORT = _env_int("CONTROL_PORT", 9200)
 VIDEO_RTP_PORT = _env_int("VIDEO_RTP_PORT", 9100)
 AUDIO_RTP_PORT = _env_int("AUDIO_RTP_PORT", 9102)
 VIDEO_HTTP_PORT = _env_int("VIDEO_HTTP_PORT", 8080)
+DETECTION_PORT = _env_int("DETECTION_PORT", 9201)
 
 VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video4")
 AUDIO_DEVICE = os.getenv("AUDIO_DEVICE", "default")
@@ -45,6 +50,12 @@ JPEG_QUALITY = _env_int("JPEG_QUALITY", 70)
 X264_BITRATE_KBPS = _env_int("X264_BITRATE_KBPS", 2500)
 OPUS_BITRATE = _env_int("OPUS_BITRATE", 32000)
 CAMERA_FORCE_FPS = os.getenv("CAMERA_FORCE_FPS", "1") == "1"
+
+YOLO_CONFIDENCE = _env_float("YOLO_CONFIDENCE", 0.4)
+YOLO_IOU = _env_float("YOLO_IOU", 0.5)
+YOLO_MAX_DET = _env_int("YOLO_MAX_DET", 20)
+YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cpu")
+YOLO_FRAME_INTERVAL = max(1, _env_int("YOLO_FRAME_INTERVAL", 3))
 
 VIDEO_FRAME_BYTES = VIDEO_WIDTH * VIDEO_HEIGHT * 3
 AUDIO_CHUNK_SAMPLES = _env_int("AUDIO_CHUNK_SAMPLES", 1024)

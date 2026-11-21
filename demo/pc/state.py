@@ -17,6 +17,9 @@ class AppState:
         self._last_frame_time = 0.0
         self._last_audio_time = 0.0
         self._audio = AudioRingBuffer(config.AUDIO_BUFFER_SAMPLES)
+        self._detections: list[dict[str, Any]] = []
+        self._detection_frame_size: tuple[int, int] = (0, 0)
+        self._last_detection_time = 0.0
         self.last_command = ""
         self.last_response: dict[str, Any] | None = None
         self.last_error = ""
@@ -38,6 +41,20 @@ class AppState:
     def get_audio(self, seconds: float) -> np.ndarray:
         sample_count = int(seconds * config.AUDIO_RATE)
         return self._audio.snapshot(sample_count)
+
+    def set_detections(
+        self, detections: list[dict[str, Any]], frame_size: tuple[int, int]
+    ) -> None:
+        with self._lock:
+            self._detections = detections
+            self._detection_frame_size = frame_size
+            self._last_detection_time = time.monotonic()
+
+    def get_detections(self) -> tuple[list[dict[str, Any]], tuple[int, int]]:
+        with self._lock:
+            if time.monotonic() - self._last_detection_time > 2.0:
+                return [], (0, 0)
+            return list(self._detections), self._detection_frame_size
 
     def video_is_live(self) -> bool:
         with self._lock:

@@ -69,7 +69,7 @@ class WakeListener:
         while not self._stop.is_set():
             try:
                 data, _peer = self._socket.recvfrom(4096)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

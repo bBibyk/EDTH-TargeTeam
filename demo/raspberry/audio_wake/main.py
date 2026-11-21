@@ -112,7 +112,7 @@ def main() -> int:
     else:
         import sounddevice as sd
 
-        def _callback(indata, frames, time_info, status) -> None:  # noqa: ANN001
+        def _callback(indata, frames, time_info, status) -> None:
             if status:
                 print(f"audio status: {status}", flush=True)
             chunks.put(indata[:, 0].copy())

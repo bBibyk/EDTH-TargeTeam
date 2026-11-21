@@ -1,10 +1,50 @@
 from __future__ import annotations
 
+import io
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from PIL import Image, ImageDraw, ImageFont
+
 from demo.pc.state import AppState
+
+
+def _draw_detections(
+    frame: bytes, detections: list[dict], frame_size: tuple[int, int]
+) -> bytes:
+    if not detections:
+        return frame
+    try:
+        image = Image.open(io.BytesIO(frame)).convert("RGB")
+    except OSError:
+        return frame
+    draw = ImageDraw.Draw(image)
+    src_w, src_h = frame_size
+    img_w, img_h = image.size
+    sx = img_w / src_w if src_w > 0 else 1.0
+    sy = img_h / src_h if src_h > 0 else 1.0
+    font = ImageFont.load_default()
+    for det in detections:
+        xyxy = det.get("xyxy")
+        if not isinstance(xyxy, (list, tuple)) or len(xyxy) != 4:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in xyxy]
+        x1, x2 = x1 * sx, x2 * sx
+        y1, y2 = y1 * sy, y2 * sy
+        label = str(det.get("label", "obj"))
+        conf = float(det.get("conf", 0.0))
+        text = f"{label} {conf:.2f}"
+        draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0), width=2)
+        text_box = draw.textbbox((x1, y1), text, font=font)
+        tw = text_box[2] - text_box[0]
+        th = text_box[3] - text_box[1]
+        ty = max(0, y1 - th - 4)
+        draw.rectangle([x1, ty, x1 + tw + 4, ty + th + 4], fill=(0, 255, 0))
+        draw.text((x1 + 2, ty + 2), text, fill=(0, 0, 0), font=font)
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=80)
+    return output.getvalue()
 
 
 class MjpegStreamServer:
@@ -56,6 +96,8 @@ class MjpegStreamServer:
                         if frame is None:
                             time.sleep(0.05)
                             continue
+                        detections, frame_size = state.get_detections()
+                        frame = _draw_detections(frame, detections, frame_size)
                         self.wfile.write(b"--frame\r\n")
                         self.wfile.write(b"Content-Type: image/jpeg\r\n")
                         self.wfile.write(

@@ -6,6 +6,7 @@ import streamlit as st
 
 from demo import config
 from demo.common.control import ControlClient
+from demo.pc.detection_receiver import DetectionReceiver
 from demo.pc.gst_receiver import GstAudioReceiver, GstVideoReceiver
 from demo.pc.mjpeg_server import MjpegStreamServer
 from demo.pc.panels import (
@@ -27,9 +28,15 @@ def _get_runtime() -> tuple[AppState, ControlClient, MjpegStreamServer]:
     mjpeg_server = MjpegStreamServer("0.0.0.0", config.VIDEO_HTTP_PORT, state)
     mjpeg_server.start()
 
+    detection_receiver = DetectionReceiver(
+        "0.0.0.0", config.DETECTION_PORT, state.set_detections
+    )
+    detection_receiver.start()
+
     atexit.register(video_receiver.stop)
     atexit.register(audio_receiver.stop)
     atexit.register(mjpeg_server.stop)
+    atexit.register(detection_receiver.stop)
 
     control_client = ControlClient(
         config.RBP_HOST,
@@ -64,6 +71,7 @@ def run() -> None:
         st.write(f"Video HTTP: `{stream_url}`")
         st.write(f"Video RTP: `{config.PC_HOST}:{config.VIDEO_RTP_PORT}`")
         st.write(f"Audio RTP: `{config.PC_HOST}:{config.AUDIO_RTP_PORT}`")
+        st.write(f"Detection TCP: `0.0.0.0:{config.DETECTION_PORT}`")
         st.write(f"Control TCP: `{config.RBP_HOST}:{config.CONTROL_PORT}`")
         st.divider()
         st.header("Capture")

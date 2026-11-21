@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import queue
 import subprocess
 import threading
 from dataclasses import dataclass
 
 import gi
+import numpy as np
 
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst
 
 from demo import config
+from demo.raspberry.detection_sender import DetectionSender
 
 
 @dataclass
@@ -27,6 +30,11 @@ class GstPipeline:
         self._thread: threading.Thread | None = None
         self._error = ""
         self._lock = threading.Lock()
+
+    def get_element(self, name: str) -> Gst.Element | None:
+        if self._pipeline is None:
+            return None
+        return self._pipeline.get_by_name(name)
 
     @property
     def is_running(self) -> bool:
@@ -147,7 +155,13 @@ def build_video_sender_pipeline(fake: bool = False) -> str:
         f"bitrate={config.X264_BITRATE_KBPS} key-int-max={config.VIDEO_FPS} "
         f"bframes=0 byte-stream=true"
     )
-    return f"{source} ! {encode} ! {sink}"
+    return (
+        f"{source} ! tee name=t "
+        f"t. ! queue ! {encode} ! {sink} "
+        f"t. ! queue leaky=downstream max-size-buffers=1 ! "
+        f"videoconvert ! video/x-raw,format=BGR ! "
+        f"appsink name=yolo-appsink emit-signals=true max-buffers=1 drop=true sync=false"
+    )
 
 
 def build_audio_sender_pipeline(fake: bool = False) -> str:
@@ -177,15 +191,23 @@ class GstSender:
         self.fake = fake
         self.video: GstPipeline | None = None
         self.audio: GstPipeline | None = None
+        self._detector = None
+        self._detection_sender: DetectionSender | None = None
+        self._detection_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
+        self._detection_thread: threading.Thread | None = None
+        self._detection_stop = threading.Event()
+        self._frame_count = 0
 
     def start(self) -> bool:
         Gst.init(None)
         if not self.fake:
             _configure_camera()
+        self._start_detector()
         self.video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
         self.audio = GstPipeline("audio-sender", build_audio_sender_pipeline(self.fake))
         self.video.start()
         self.audio.start()
+        self._attach_yolo_sink()
         return self.video.is_running and self.audio.is_running
 
     def status(self) -> dict[str, object]:
@@ -194,10 +216,101 @@ class GstSender:
             "audio_running": bool(self.audio and self.audio.is_running),
             "video_error": self.video.error if self.video else "",
             "audio_error": self.audio.error if self.audio else "",
+            "yolo_enabled": self._detector is not None,
         }
 
     def stop(self) -> None:
+        self._detection_stop.set()
+        if self._detection_thread is not None and self._detection_thread.is_alive():
+            self._detection_thread.join(timeout=2.0)
+            self._detection_thread = None
+        if self._detection_sender is not None:
+            self._detection_sender.close()
+            self._detection_sender = None
         if self.video is not None:
             self.video.stop()
         if self.audio is not None:
             self.audio.stop()
+
+    def _start_detector(self) -> None:
+        model_path = config.YOLO_MODEL_PATH
+        if not model_path.exists():
+            print(f"YOLO model not found: {model_path}", flush=True)
+            return
+        try:
+            from demo.raspberry.yolo_detector import YoloDetector
+
+            self._detector = YoloDetector(
+                model_path,
+                config.YOLO_CONFIDENCE,
+                config.YOLO_IOU,
+                config.YOLO_MAX_DET,
+                config.YOLO_DEVICE,
+            )
+            self._detection_sender = DetectionSender(
+                config.PC_HOST, config.DETECTION_PORT
+            )
+            self._detection_stop.clear()
+            self._detection_thread = threading.Thread(
+                target=self._detection_loop, name="yolo-worker", daemon=True
+            )
+            self._detection_thread.start()
+            print(f"YOLO enabled: {model_path}", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"YOLO disabled: {exc}", flush=True)
+            self._detector = None
+            self._detection_sender = None
+
+    def _attach_yolo_sink(self) -> None:
+        if self.video is None or self._detector is None:
+            return
+        appsink = self.video.get_element("yolo-appsink")
+        if appsink is None:
+            return
+        appsink.connect("new-sample", self._on_yolo_sample)
+
+    def _on_yolo_sample(self, sink: Gst.Element) -> Gst.FlowReturn:
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        self._frame_count += 1
+        if self._frame_count % config.YOLO_FRAME_INTERVAL != 0:
+            return Gst.FlowReturn.OK
+        buffer = sample.get_buffer()
+        ok, map_info = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            frame = np.frombuffer(map_info.data, dtype=np.uint8).copy()
+        finally:
+            buffer.unmap(map_info)
+        expected = config.VIDEO_WIDTH * config.VIDEO_HEIGHT * 3
+        if frame.size != expected:
+            return Gst.FlowReturn.OK
+        frame = frame.reshape((config.VIDEO_HEIGHT, config.VIDEO_WIDTH, 3))
+        if self._detection_queue.full():
+            try:
+                self._detection_queue.get_nowait()
+            except queue.Empty:
+                pass
+        try:
+            self._detection_queue.put_nowait(frame)
+        except queue.Full:
+            pass
+        return Gst.FlowReturn.OK
+
+    def _detection_loop(self) -> None:
+        while not self._detection_stop.is_set():
+            try:
+                frame = self._detection_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if self._detector is None or self._detection_sender is None:
+                continue
+            try:
+                detections = self._detector.infer(frame)
+                self._detection_sender.send(
+                    detections, (config.VIDEO_WIDTH, config.VIDEO_HEIGHT)
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"YOLO inference error: {exc}", flush=True)

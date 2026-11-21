@@ -88,9 +88,8 @@ def main() -> int:
     args = parser.parse_args()
 
     import cv2
-    from ultralytics import YOLO
-
     import numpy as np
+    from ultralytics import YOLO
 
     model = YOLO(str(args.model), task="detect")
     class_ids = None
