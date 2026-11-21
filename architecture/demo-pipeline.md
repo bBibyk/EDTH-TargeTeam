@@ -21,7 +21,8 @@ This is the "RaspberryPi (target confirmation, image recognition)" and
    ./demo/scripts/run_pc.sh
    ```
 
-3. Open **http://localhost:8501**. The video appears a few seconds after the page opens, with green detection boxes.
+3. Open **http://localhost:8501** (`run_pc.sh` usually opens it by itself). The audio panel updates twice a second.
+   Video only starts when the audio model hears a vehicle, drone or footsteps (see below), then shows green detection boxes.
 
 Nothing showing? See section 10.
 
@@ -33,7 +34,9 @@ Nothing showing? See section 10.
 flowchart LR
   subgraph PI["Raspberry Pi 5 (on the drone)"]
     CAM["USB camera<br/>MJPEG 640×480 @ 30 fps"] --> SEND["run_rbp.sh<br/>GStreamer sender"]
-    MIC["Camera microphone"] --> SEND
+    MIC["STM32 board mic (USB serial)<br/>or the camera mic"] --> SEND
+    SEND -->|"last 2 s, every 0.5 s"| AUD["EfficientAT audio model<br/>ONNX, CPU"]
+    AUD -->|"vehicle / drone / footsteps"| WAKE(("switch video on"))
     SEND -->|"every 3rd frame"| YOLO["YOLO26n<br/>NCNN, CPU"]
   end
   subgraph PC["Demo PC"]
@@ -43,6 +46,7 @@ flowchart LR
   SEND -- "video H.264 · RTP/UDP 9100" --> RECV
   SEND -- "sound Opus · RTP/UDP 9102" --> RECV
   YOLO -- "detections · JSON/TCP 9201" --> RECV
+  AUD -- "audio results · JSON/TCP 9202" --> RECV
   DASH -- "commands · JSON/TCP 9200" --> SEND
   DASH --> BROWSER["Web browser"]
   MJPEG --> BROWSER
@@ -50,11 +54,13 @@ flowchart LR
 
 **On the Pi**, one program (`run_rbp.sh`) does everything:
 
-1. reads the camera's JPEG frames and compresses them to H.264;
-2. reads the microphone and compresses it to Opus;
-3. sends both as RTP over UDP to the Demo PC;
-4. copies every 3rd frame to YOLO26n, and sends the boxes it finds to the Demo PC;
+1. reads the microphone (the STM32 board when `AUDIO_INPUT_FORMAT=stm32`), compresses it to Opus and sends it to the Demo PC;
+2. every 0.5 s, if the sound is louder than `AUDIO_RMS_WAKE_THRESHOLD`, runs the audio model on the last 2 s and sends the result to the PC;
+3. when the model gives vehicle, drone or footsteps ≥ `AUDIO_VEHICLE_PROB_THRESHOLD`, switches the camera on; it switches off again `VIDEO_WAKE_HOLD_SECONDS` after the last such result;
+4. while the camera is on: compresses its JPEG frames to H.264, sends them as RTP over UDP, and copies every 3rd frame to YOLO26n, whose boxes go to the PC;
 5. listens for commands from the Demo PC.
+
+If the camera is missing or fails, the audio part keeps running and the Pi tries the camera again 5 s later.
 
 **On the Demo PC**, `run_pc.sh` receives and decodes the video and sound. It
 draws the boxes onto the video and serves the dashboard.
@@ -66,12 +72,13 @@ draws the boxes onto the video and serves the dashboard.
 | 9100 | UDP (RTP) | Pi → PC | Video, H.264 |
 | 9102 | UDP (RTP) | Pi → PC | Sound, Opus, 48 kHz mono |
 | 9201 | TCP | Pi → PC | Detections, one JSON line per analysed frame |
+| 9202 | TCP | Pi → PC | Audio model results, one JSON line every 0.5 s |
 | 9200 | TCP | PC → Pi | Commands (`LANDING`, `STRIKE`), JSON |
 | 8080 | HTTP | PC → browser | Video with boxes drawn (MJPEG), shown inside the dashboard |
 | 8501 | HTTP | PC → browser | Streamlit dashboard |
 
 Both machines must be on the same network. The PC must accept incoming
-traffic on 9100, 9102 and 9201 (firewall, section 10).
+traffic on 9100, 9102, 9201 and 9202 (firewall, section 10).
 
 ### Messages (for teams that want to plug in)
 
@@ -210,11 +217,15 @@ Each machine has its **own** `demo/.env`, copied from
 | `PC_PUBLIC_HOST` | PC | Address the browser uses to reach the PC's video: `127.0.0.1` if the browser runs on the PC, otherwise the PC's IP |
 | `VIDEO_DEVICE` | Pi | Camera, e.g. `/dev/video0` (section 4, step 5). The example file says `/dev/video4`, which is wrong on our Pi |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` / `VIDEO_FPS` | Pi | `640` / `480` / `30`. Must be an MJPEG mode the camera offers |
-| `AUDIO_INPUT_FORMAT` / `AUDIO_DEVICE` | Pi | `pulse` / `default` (the system's default mic) |
+| `AUDIO_INPUT_FORMAT` / `AUDIO_DEVICE` | Pi | `stm32` for the STM32 board ([stm32/mic_stream](../stm32/mic_stream/README.md)), or `pulse` / `default` for the system's default mic |
+| `STM32_MIC_PORT` / `STM32_MIC_BAUD` | Pi | Empty (auto-detect the board's ST-LINK port) / `1000000` |
+| `AUDIO_RMS_WAKE_THRESHOLD` | Pi | `0.03` (−30 dBFS). Quieter sound is reported as background without running the model |
+| `AUDIO_VEHICLE_PROB_THRESHOLD` / `VIDEO_WAKE_HOLD_SECONDS` | Pi | `0.5` / `10.0`: when the camera goes on, and how long it stays on |
+| `AUDIO_EVENT_MODEL_PATH` / `AUDIO_EVENT_MEL_BASIS_PATH` | Pi | `models/audio/raspberry_pi/efficientat_audio_v1.onnx` / `.../mel_basis.npy` |
 | `YOLO_MODEL_PATH` | Pi | `models/vision/yolo26n_ncnn_model`, relative to the repository root |
 | `YOLO_FRAME_INTERVAL` | Pi | `3` = analyse every 3rd frame (10 per second at 30 fps) |
 | `YOLO_CONFIDENCE` / `YOLO_IOU` / `YOLO_MAX_DET` | Pi | `0.4` / `0.5` / `20` |
-| `CONTROL_PORT`, `VIDEO_RTP_PORT`, `AUDIO_RTP_PORT`, `DETECTION_PORT`, `VIDEO_HTTP_PORT` | both | Keep the defaults; they must be the same on both sides |
+| `CONTROL_PORT`, `VIDEO_RTP_PORT`, `AUDIO_RTP_PORT`, `DETECTION_PORT`, `AUDIO_RESULT_PORT`, `VIDEO_HTTP_PORT` | both | Keep the defaults; they must be the same on both sides |
 
 `YOLO_CONF`, `YOLO_IMGSZ` and `DETECTOR_SOURCE` belong to a different program
 (`run_detector.sh`, section 11), not to `run_rbp.sh`.
@@ -378,8 +389,15 @@ wakes up the visual detector:
 
 | Script | What it does |
 |---|---|
-| [run_audio_wake.sh](../demo/scripts/run_audio_wake.sh) | Listens to the mic and scores 5 s windows with `models/audio/audio_wake.onnx` (a loudness placeholder until that file exists). Sends a UDP "wake" message to port 9300 on the Pi itself |
+| [run_audio_wake.sh](../demo/scripts/run_audio_wake.sh) | Listens to the mic at 32 kHz and, every 0.5 s, scores the last 2 s with the EfficientAT model in `models/audio/raspberry_pi` (classes: background, vehicle, drone, footsteps; about 10 ms per window on the Pi). When the drone probability (`AUDIO_WAKE_CLASSES`) is at least `AUDIO_WAKE_THRESHOLD` (default 0.5), it sends a UDP "wake" message to port 9300 on the Pi itself. Add `--verbose` to print every class's probability, or `--wav clip.wav` to replay a recording |
 | [run_detector.sh](../demo/scripts/run_detector.sh) | YOLO on the camera, but only for `WAKE_HOLD_SECONDS` after a wake. Logs detections; doesn't stream to the PC |
 
-They use the same camera and mic as `run_rbp.sh`, so run one path or the
-other, not both.
+`run_detector.sh` needs the camera, so it can't run while `run_rbp.sh` does.
+`run_audio_wake.sh` only reads the mic. Through PipeWire, it can share the mic with `run_rbp.sh`.
+
+Model files, contract and how to test them: [models/audio/README.md](../models/audio/README.md).
+
+The STM32 microphone board (B-L475E-IOT01A) plugs into the Pi by USB and streams raw 32 kHz audio,
+using the firmware in [stm32/mic_stream](../stm32/mic_stream/README.md). Use it with
+`./demo/scripts/run_audio_wake.sh --device stm32 --verbose`, and record clips with
+`python -m demo.raspberry.audio_wake.stm32_mic --record clip.wav`.
