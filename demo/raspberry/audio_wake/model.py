@@ -1,11 +1,13 @@
 """Audio wake model wrapper.
 
-Drop the trained model at `models/audio/audio_wake.onnx` (see models/audio/README.md
-for the expected contract). Until it exists, a clearly-labelled RMS-energy
-placeholder is used so the wake -> detector chain can be tested end to end.
+`load_audio_wake_model(path)` picks the format from `path` (see models/audio/README.md):
+  * a directory holding `knn.npz` -> native-frontend EfficientAT mn30 + cosine kNN (best model)
+  * an `.onnx` file                -> CNN on the organiser spectrogram (e.g. audio_wake.onnx, mn10)
+  * nothing there                  -> RMS-energy placeholder, only to test the wake -> detector chain
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +52,25 @@ class OnnxAudioWakeModel(AudioWakeModel):
         return float(1.0 / (1.0 + np.exp(-logit)))
 
 
+class NativeKnnWakeModel(AudioWakeModel):
+    """EfficientAT mn30 on its own log-mel frontend -> embedding -> cosine kNN over the 56 labelled clips.
+
+    `emb_avg` > 1 averages the embeddings of the last N windows before the kNN vote (steadier score,
+    slower to react). Set it with AUDIO_WAKE_EMB_AVG.
+    """
+
+    def __init__(self, model_dir: Path, threads: int = 4, emb_avg: int = 1) -> None:
+        from demo.raspberry.audio_wake.native import KnnModel
+
+        self._model = KnnModel(model_dir, threads=threads, emb_avg=emb_avg)
+        self.threshold = self._model.thr
+        self.name = f"{model_dir.name} (emb_avg={emb_avg})"
+
+    def predict(self, samples: np.ndarray) -> float:
+        p_drone, _p4 = self._model(samples)
+        return p_drone
+
+
 class PlaceholderEnergyModel(AudioWakeModel):
     """NOT a drone detector: fires on loud sound. Only for testing the plumbing."""
 
@@ -66,6 +87,9 @@ class PlaceholderEnergyModel(AudioWakeModel):
 
 
 def load_audio_wake_model(path: Path, threads: int = 4) -> AudioWakeModel:
+    if path.is_dir() and (path / "knn.npz").is_file():
+        emb_avg = int(os.getenv("AUDIO_WAKE_EMB_AVG", "1"))
+        return NativeKnnWakeModel(path, threads=threads, emb_avg=emb_avg)
     if path.is_file():
         return OnnxAudioWakeModel(path, threads=threads)
     print(

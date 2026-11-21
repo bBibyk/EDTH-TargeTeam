@@ -1,0 +1,14 @@
+{
+ "arch": "mn30",
+ "int8": false,
+ "bank": [],
+ "w_ext": 1.0,
+ "k": 5,
+ "temp": 5.0,
+ "threads": 16,
+ "out": "deploy/native_knn_mn30",
+ "net": "mn30_native_net.onnx",
+ "thr": 0.4041355565436884,
+ "cv_auc": 0.8305681246857718,
+ "bank_size": 56
+}
