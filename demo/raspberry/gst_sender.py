@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 
 import gi
@@ -14,6 +15,10 @@ from gi.repository import GLib, Gst
 from demo import config
 from demo.raspberry.audio_result_sender import AudioResultSender
 from demo.raspberry.detection_sender import DetectionSender
+
+STM32_APPSRC_NAME = "stm32-audio-src"
+STM32_RATE = 32000
+VIDEO_RETRY_SECONDS = 5.0  # after the camera fails to start, wait this long before trying again
 
 
 @dataclass
@@ -176,6 +181,12 @@ def build_audio_sender_pipeline(fake: bool = False) -> str:
         source = f"pulsesrc device={config.AUDIO_DEVICE} do-timestamp=true"
     elif config.AUDIO_INPUT_FORMAT == "alsa":
         source = f"alsasrc device={config.AUDIO_DEVICE} do-timestamp=true"
+    elif config.AUDIO_INPUT_FORMAT == "stm32":
+        # Fed by GstSender._push_stm32_audio from the STM32 board (stm32/mic_stream firmware).
+        source = (
+            f"appsrc name={STM32_APPSRC_NAME} is-live=true format=time do-timestamp=false "
+            f'caps="audio/x-raw,format=S16LE,rate={STM32_RATE},channels=1,layout=interleaved"'
+        )
     else:
         source = "autoaudiosrc do-timestamp=true"
 
@@ -213,6 +224,10 @@ class GstSender:
         self._video_active = threading.Event()
         self._last_vehicle_time = 0.0
         self._wake_lock = threading.Lock()
+        self._video_failed_at = -VIDEO_RETRY_SECONDS
+        self._stm32_mic = None
+        self._stm32_appsrc: Gst.Element | None = None
+        self._stm32_pts: int | None = None
 
     def start(self) -> bool:
         Gst.init(None)
@@ -223,6 +238,7 @@ class GstSender:
         self.audio = GstPipeline("audio-sender", build_audio_sender_pipeline(self.fake))
         self.audio.start()
         self._attach_audio_model_sink()
+        self._start_stm32_mic()
         return self.audio.is_running
 
     def status(self) -> dict[str, object]:
@@ -234,11 +250,17 @@ class GstSender:
             "yolo_enabled": self._detector is not None,
             "audio_model_enabled": self._audio_model is not None,
             "video_active": self._video_active.is_set(),
+            "audio_source": "audiotestsrc" if self.fake else config.AUDIO_INPUT_FORMAT,
+            "stm32_connected": bool(self._stm32_mic and self._stm32_mic.connected),
         }
 
     def stop(self) -> None:
         self._detection_stop.set()
         self._audio_stop.set()
+        if self._stm32_mic is not None:
+            self._stm32_mic.stop()
+            self._stm32_mic = None
+        self._stm32_appsrc = None
         if self._detection_thread is not None and self._detection_thread.is_alive():
             self._detection_thread.join(timeout=2.0)
             self._detection_thread = None
@@ -366,29 +388,86 @@ class GstSender:
 
     def _start_video_if_needed(self) -> None:
         with self._wake_lock:
+            now = time.monotonic()
             if self._video_active.is_set():
-                self._last_vehicle_time = __import__("time").monotonic()
+                self._last_vehicle_time = now
                 return
+            if now - self._video_failed_at < VIDEO_RETRY_SECONDS:
+                return  # the camera just failed: don't retry on every audio window
             if not self.fake:
                 _configure_camera()
-            self.video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
-            self.video.start()
+            video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
+            video.start()
+            if not video.is_running:
+                self._video_failed_at = now
+                print(
+                    f"Video could not start ({video.error or 'camera missing?'}); "
+                    f"audio keeps running, retry in {VIDEO_RETRY_SECONDS:.0f} s",
+                    flush=True,
+                )
+                video.stop()
+                return
+            self.video = video  # only publish a running pipeline (main.py watches it)
             self._attach_yolo_sink()
             self._video_active.set()
-            self._last_vehicle_time = __import__("time").monotonic()
+            self._last_vehicle_time = now
             print("Video activated by audio model", flush=True)
+
+    def handle_video_failure(self) -> None:
+        """Video died (camera unplugged, ...): drop it, keep audio running, retry later."""
+        with self._wake_lock:
+            video, self.video = self.video, None
+            self._video_active.clear()
+            self._video_failed_at = time.monotonic()
+        if video is not None:
+            error = video.error
+            video.stop()
+            print(f"Video stopped: {error or 'pipeline not running'}", flush=True)
 
     def _maybe_stop_video(self) -> None:
         with self._wake_lock:
             if not self._video_active.is_set():
                 return
-            if __import__("time").monotonic() - self._last_vehicle_time < config.VIDEO_WAKE_HOLD_SECONDS:
+            if time.monotonic() - self._last_vehicle_time < config.VIDEO_WAKE_HOLD_SECONDS:
                 return
             self._video_active.clear()
-            if self.video is not None:
-                self.video.stop()
-                self.video = None
+            video, self.video = self.video, None  # unpublish first, so main.py doesn't see a dying pipeline
+            if video is not None:
+                video.stop()
             print("Video deactivated (no vehicle)", flush=True)
+
+    def _start_stm32_mic(self) -> None:
+        if self.fake or config.AUDIO_INPUT_FORMAT != "stm32" or self.audio is None:
+            return
+        appsrc = self.audio.get_element(STM32_APPSRC_NAME)
+        if appsrc is None:
+            print("STM32 audio source is missing from the audio pipeline", flush=True)
+            return
+        from demo.raspberry.audio_wake.stm32_mic import Stm32Microphone
+
+        self._stm32_appsrc = appsrc
+        self._stm32_pts = None
+        self._stm32_mic = Stm32Microphone(
+            self._push_stm32_audio,
+            port=config.STM32_MIC_PORT,
+            baud=config.STM32_MIC_BAUD,
+            as_int16=True,
+            reconnect=True,  # keeps retrying if the board is unplugged or being reflashed
+        )
+        self._stm32_mic.start()
+
+    def _push_stm32_audio(self, block: np.ndarray) -> None:
+        appsrc = self._stm32_appsrc
+        if appsrc is None or block.size == 0:
+            return
+        if self._stm32_pts is None:  # start at the pipeline's current running time
+            clock = appsrc.get_clock()
+            self._stm32_pts = max(0, clock.get_time() - appsrc.get_base_time()) if clock else 0
+        buffer = Gst.Buffer.new_wrapped(block.astype("<i2").tobytes())
+        buffer.pts = self._stm32_pts
+        buffer.duration = block.size * Gst.SECOND // STM32_RATE
+        self._stm32_pts += buffer.duration
+        appsrc.emit("push-buffer", buffer)
 
     def _attach_audio_model_sink(self) -> None:
         if self.audio is None or self._audio_model is None:

@@ -54,7 +54,12 @@ def main() -> int:
             flush=True,
         )
         video_source = "videotestsrc" if args.fake else config.VIDEO_DEVICE
-        audio_source = "audiotestsrc" if args.fake else config.AUDIO_DEVICE
+        if args.fake:
+            audio_source = "audiotestsrc"
+        elif config.AUDIO_INPUT_FORMAT == "stm32":
+            audio_source = "STM32 board (USB serial)"
+        else:
+            audio_source = config.AUDIO_DEVICE
         print(
             f"Video: {video_source} -> rtp://{config.PC_HOST}:{config.VIDEO_RTP_PORT}",
             flush=True,
@@ -84,11 +89,11 @@ def main() -> int:
         print("Raspberry simulation ready. Press Ctrl+C to stop.", flush=True)
 
         while not stop_event.wait(0.5):
-            if sender.video is not None and not sender.video.is_running:
-                print("Video sender exited unexpectedly.", flush=True)
-                _print_sender_failure(sender)
-                stop_event.set()
-            if sender.audio is not None and not sender.audio.is_running:
+            video = sender.video
+            if video is not None and (not video.is_running or video.error):
+                # Video is switched on by the audio model; losing it is not fatal.
+                sender.handle_video_failure()
+            if sender.audio is not None and (not sender.audio.is_running or sender.audio.error):
                 print("Audio sender exited unexpectedly.", flush=True)
                 _print_sender_failure(sender)
                 stop_event.set()

@@ -1,17 +1,20 @@
 """Audio wake program: microphone -> audio wake model -> WAKE signal to the detector.
 
-Keeps a sliding window (default 5 s, the length the model is trained on), scores it
-every hop (default 0.5 s) and sends a UDP wake datagram whenever the score crosses
-the threshold. Each datagram re-arms the detector for WAKE_HOLD_SECONDS.
+Keeps a sliding window (the length the model is trained on: 2 s at 32 kHz for the
+EfficientAT model), scores it every hop (default 0.5 s) and sends a UDP wake datagram
+whenever the score crosses the threshold. Each datagram re-arms the detector for
+WAKE_HOLD_SECONDS.
 
-    python -m demo.raspberry.audio_wake.main                 # live microphone
-    python -m demo.raspberry.audio_wake.main --wav clip.wav  # replay a file (testing)
+    python -m demo.raspberry.audio_wake.main --verbose            # live microphone
+    python -m demo.raspberry.audio_wake.main --wav clip.wav       # replay a file (testing)
+    python -m demo.raspberry.audio_wake.main --wake-classes drone,vehicle
 """
 from __future__ import annotations
 
 import argparse
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -29,26 +32,49 @@ from demo.common.wake import WakeSender
 from demo.raspberry.audio_wake.model import load_audio_wake_model
 
 
+def _read_with_ffmpeg(path: Path, target_rate: int) -> np.ndarray:
+    """Any format ffmpeg knows (flac, mp3, m4a, 24-bit wav, video, ...) -> mono float32."""
+    try:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", str(target_rate),
+             "-f", "s16le", "-"],
+            capture_output=True, check=True,
+        ).stdout
+    except FileNotFoundError as exc:
+        raise ValueError(f"{path}: not a 16-bit PCM wav, and ffmpeg is not installed") from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"{path}: ffmpeg could not read it: {exc.stderr.decode().strip()}") from exc
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def _read_wav(path: Path, target_rate: int) -> np.ndarray:
-    with wave.open(str(path), "rb") as handle:
-        rate = handle.getframerate()
-        channels = handle.getnchannels()
-        width = handle.getsampwidth()
-        raw = handle.readframes(handle.getnframes())
-    if width != 2:
-        raise ValueError(f"{path}: only 16-bit PCM wav is supported")
+    try:
+        with wave.open(str(path), "rb") as handle:
+            rate = handle.getframerate()
+            channels = handle.getnchannels()
+            width = handle.getsampwidth()
+            raw = handle.readframes(handle.getnframes())
+    except (wave.Error, EOFError):
+        return _read_with_ffmpeg(path, target_rate)  # e.g. a FLAC file named .wav
+    if width != 2 or rate != target_rate:
+        return _read_with_ffmpeg(path, target_rate)  # proper resampling
     data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    data = data.reshape(-1, channels).mean(axis=1)
-    if rate != target_rate:
-        positions = np.arange(0, len(data), rate / target_rate)
-        data = np.interp(positions, np.arange(len(data)), data).astype(np.float32)
-    return data
+    return data.reshape(-1, channels).mean(axis=1)
 
 
 def _wav_feeder(
-    path: Path, rate: int, chunk: int, out: queue.Queue, stop: threading.Event, loop: bool
+    path: Path, rate: int, chunk: int, out: queue.Queue, stop: threading.Event, loop: bool,
+    min_samples: int = 0,
 ) -> None:
     data = _read_wav(path, rate)
+    if 0 < len(data) < min_samples:
+        repeats = -(-min_samples // len(data))
+        print(
+            f"{path.name} is {len(data) / rate:.2f} s, shorter than the model window: "
+            f"playing it {repeats} times in a row",
+            flush=True,
+        )
+        data = np.tile(data, repeats)
     period = chunk / rate
     while not stop.is_set():
         for start in range(0, len(data), chunk):
@@ -63,12 +89,22 @@ def _wav_feeder(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audio wake -> detector wake signal")
-    parser.add_argument("--model", type=Path, default=config.AUDIO_MODEL_PATH)
-    parser.add_argument("--wav", type=Path, help="Replay a wav file instead of the microphone")
+    parser.add_argument("--model", type=Path, default=config.AUDIO_WAKE_MODEL_PATH)
+    parser.add_argument(
+        "--wav", type=Path,
+        help="Replay an audio file instead of the microphone (wav; flac/mp3/... via ffmpeg)",
+    )
     parser.add_argument("--loop", action="store_true", help="Loop the --wav file")
     parser.add_argument("--device", default=config.AUDIO_WAKE_DEVICE, help="sounddevice input")
     parser.add_argument("--threshold", type=float, default=None)
-    parser.add_argument("--window", type=float, default=config.AUDIO_WAKE_WINDOW_SECONDS)
+    parser.add_argument(
+        "--wake-classes", default=",".join(config.AUDIO_WAKE_CLASSES),
+        help="Comma-separated classes whose probabilities form the wake score",
+    )
+    parser.add_argument(
+        "--window", type=float, default=config.AUDIO_WAKE_WINDOW_SECONDS,
+        help="Window length in s (ignored when the model has a fixed window)",
+    )
     parser.add_argument("--hop", type=float, default=config.AUDIO_WAKE_HOP_SECONDS)
     parser.add_argument(
         "--min-consecutive", type=int, default=1,
@@ -79,8 +115,12 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="Print every score")
     args = parser.parse_args()
 
-    model = load_audio_wake_model(args.model, threads=config.AUDIO_WAKE_THREADS)
+    wake_classes = tuple(c.strip() for c in args.wake_classes.split(",") if c.strip())
+    model = load_audio_wake_model(
+        args.model, threads=config.AUDIO_WAKE_THREADS, wake_classes=wake_classes
+    )
     rate = model.sample_rate
+    window_seconds = getattr(model, "window_seconds", None) or args.window
     if args.threshold is not None:
         threshold = args.threshold
     elif config.AUDIO_WAKE_THRESHOLD:
@@ -88,7 +128,7 @@ def main() -> int:
     else:
         threshold = model.threshold
 
-    window = int(args.window * rate)
+    window = int(window_seconds * rate)
     hop = int(args.hop * rate)
     ring = AudioRingBuffer(window, dtype=np.float32)
     chunks: queue.Queue = queue.Queue()
@@ -105,10 +145,21 @@ def main() -> int:
     if args.wav is not None:
         threading.Thread(
             target=_wav_feeder,
-            args=(args.wav, rate, hop, chunks, stop, args.loop),
+            args=(args.wav, rate, hop, chunks, stop, args.loop, window + 4 * hop),
             daemon=True,
         ).start()
         source = str(args.wav)
+    elif args.device and str(args.device).startswith("stm32"):
+        # STM32 board over the ST-LINK USB serial port: "stm32" or "stm32:/dev/ttyACM1"
+        from demo.raspberry.audio_wake.stm32_mic import Stm32Microphone
+
+        if rate != Stm32Microphone.sample_rate:
+            print(f"The STM32 streams {Stm32Microphone.sample_rate} Hz but the model needs {rate} Hz.")
+            return 1
+        port = str(args.device).partition(":")[2] or config.STM32_MIC_PORT
+        stream = Stm32Microphone(chunks.put, port=port, baud=config.STM32_MIC_BAUD)
+        stream.start()
+        source = f"STM32 microphone ({stream.port})"
     else:
         import sounddevice as sd
 
@@ -126,7 +177,7 @@ def main() -> int:
 
     print(
         f"Audio wake: {source} @ {rate} Hz, model={model.name}, thr={threshold:.3f}, "
-        f"window={args.window}s hop={args.hop}s -> udp://{args.host}:{args.port}",
+        f"window={window_seconds}s hop={args.hop}s -> udp://{args.host}:{args.port}",
         flush=True,
     )
 
@@ -151,7 +202,9 @@ def main() -> int:
             latency_ms = (time.perf_counter() - started) * 1000.0
             streak = streak + 1 if score >= threshold else 0
             if args.verbose:
-                print(f"score={score:.3f} ({latency_ms:.0f} ms)", flush=True)
+                probs = getattr(model, "last_probabilities", None)
+                detail = "  " + " ".join(f"{k}={v:.2f}" for k, v in probs.items()) if probs else ""
+                print(f"score={score:.3f} ({latency_ms:.0f} ms){detail}", flush=True)
             if streak >= args.min_consecutive:
                 sender.send(score, model=model.name)
                 print(f"WAKE sent (score={score:.3f}, {latency_ms:.0f} ms)", flush=True)
@@ -159,7 +212,8 @@ def main() -> int:
         stop.set()
         if stream is not None:
             stream.stop()
-            stream.close()
+            if hasattr(stream, "close"):
+                stream.close()
         sender.close()
         print("Audio wake stopped.", flush=True)
     return 0

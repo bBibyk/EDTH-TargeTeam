@@ -1,8 +1,10 @@
 """Audio wake model wrapper.
 
-Drop the trained model at `models/audio/audio_wake.onnx` (see models/audio/README.md
-for the expected contract). Until it exists, a clearly-labelled RMS-energy
-placeholder is used so the wake -> detector chain can be tested end to end.
+`AUDIO_MODEL_PATH` (default `models/audio/raspberry_pi`) can be:
+- a folder with an .onnx + `mel_basis.npy` -> the EfficientAT classifier (efficientat.py),
+- a single .onnx with the older spectrogram-image contract (see models/audio/README.md).
+If neither exists, a clearly-labelled RMS-energy placeholder is used so the
+wake -> detector chain can be tested end to end.
 """
 from __future__ import annotations
 
@@ -65,7 +67,14 @@ class PlaceholderEnergyModel(AudioWakeModel):
         return float(1.0 / (1.0 + np.exp(-(dbfs - self._mid) / 3.0)))
 
 
-def load_audio_wake_model(path: Path, threads: int = 4) -> AudioWakeModel:
+def load_audio_wake_model(
+    path: Path, threads: int = 4, wake_classes: tuple[str, ...] = ("drone",)
+) -> AudioWakeModel:
+    from demo.raspberry.audio_wake.efficientat import EfficientAtModel, find_efficientat_onnx
+
+    efficientat = find_efficientat_onnx(path)  # folder with mel_basis.npy (current model)
+    if efficientat is not None:
+        return EfficientAtModel(efficientat, wake_classes=wake_classes, threads=threads)
     if path.is_file():
         return OnnxAudioWakeModel(path, threads=threads)
     print(

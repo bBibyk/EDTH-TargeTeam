@@ -37,6 +37,7 @@ AUDIO_RESULT_PORT = _env_int("AUDIO_RESULT_PORT", 9202)
 
 VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video4")
 AUDIO_DEVICE = os.getenv("AUDIO_DEVICE", "default")
+# Pi microphone for run_rbp.sh: "pulse" / "alsa" (AUDIO_DEVICE) or "stm32" (STM32 board over USB serial)
 AUDIO_INPUT_FORMAT = os.getenv("AUDIO_INPUT_FORMAT", "pulse")
 
 VIDEO_WIDTH = _env_int("VIDEO_WIDTH", 640)
@@ -89,10 +90,22 @@ WAKE_PORT = _env_int("WAKE_PORT", 9300)
 # How long the detector stays awake after the last wake signal.
 WAKE_HOLD_SECONDS = _env_float("WAKE_HOLD_SECONDS", 10.0)
 
+# Model for run_audio_wake.sh: a folder with .onnx + mel_basis.npy (EfficientAT) or a single .onnx.
+# AUDIO_MODEL_PATH is the older name of the same setting and is still accepted.
 AUDIO_WAKE_MODEL_PATH = Path(
-    os.getenv("AUDIO_WAKE_MODEL_PATH", str(MODELS_DIR / "audio" / "audio_wake.onnx"))
+    os.getenv("AUDIO_WAKE_MODEL_PATH")
+    or os.getenv("AUDIO_MODEL_PATH")
+    or str(MODELS_DIR / "audio" / "raspberry_pi")
 )
-AUDIO_WAKE_DEVICE = os.getenv("AUDIO_WAKE_DEVICE", "") or None  # sounddevice name/index
+AUDIO_MODEL_PATH = AUDIO_WAKE_MODEL_PATH  # old name, kept for compatibility
+# Which classes of the EfficientAT model count as "wake" (probabilities are summed).
+AUDIO_WAKE_CLASSES = tuple(
+    c.strip() for c in os.getenv("AUDIO_WAKE_CLASSES", "drone").split(",") if c.strip()
+)
+# sounddevice name/index, or "stm32" / "stm32:<port>" for the STM32 board (stm32/mic_stream)
+AUDIO_WAKE_DEVICE = os.getenv("AUDIO_WAKE_DEVICE", "") or None
+STM32_MIC_PORT = os.getenv("STM32_MIC_PORT", "") or None  # empty -> auto (ST-LINK by-id name)
+STM32_MIC_BAUD = _env_int("STM32_MIC_BAUD", 1_000_000)
 AUDIO_WAKE_WINDOW_SECONDS = _env_float("AUDIO_WAKE_WINDOW_SECONDS", 5.0)
 AUDIO_WAKE_HOP_SECONDS = _env_float("AUDIO_WAKE_HOP_SECONDS", 0.5)
 # Empty -> use the threshold stored in the ONNX metadata (or 0.5).
@@ -122,7 +135,8 @@ AUDIO_EVENT_MEL_BASIS_PATH = Path(
 if not AUDIO_EVENT_MEL_BASIS_PATH.is_absolute():
     AUDIO_EVENT_MEL_BASIS_PATH = ROOT_DIR / AUDIO_EVENT_MEL_BASIS_PATH
 
-AUDIO_RMS_WAKE_THRESHOLD = _env_float("AUDIO_RMS_WAKE_THRESHOLD", 0.5)
+# The model only runs when the last audio chunk is louder than this RMS (0.03 = -30 dBFS).
+AUDIO_RMS_WAKE_THRESHOLD = _env_float("AUDIO_RMS_WAKE_THRESHOLD", 0.03)
 AUDIO_VEHICLE_PROB_THRESHOLD = _env_float("AUDIO_VEHICLE_PROB_THRESHOLD", 0.5)
 VIDEO_WAKE_HOLD_SECONDS = _env_float("VIDEO_WAKE_HOLD_SECONDS", 10.0)
 YOLO_IMGSZ = _env_int("YOLO_IMGSZ", 640)
