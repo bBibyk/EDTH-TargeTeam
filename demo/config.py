@@ -67,6 +67,33 @@ CONTROL_TIMEOUT_SECONDS = _env_float("CONTROL_TIMEOUT_SECONDS", 2.0)
 
 TONE_SAMPLE_RATE = _env_int("TONE_SAMPLE_RATE", 44100)
 
+# --- Audio wake -> visual detector -------------------------------------------
+MODELS_DIR = Path(os.getenv("MODELS_DIR", str(ROOT_DIR / "models")))
+
+# UDP address the detector listens on for wake signals (same Pi -> localhost).
+WAKE_HOST = os.getenv("WAKE_HOST", "127.0.0.1")
+WAKE_BIND_HOST = os.getenv("WAKE_BIND_HOST", "127.0.0.1")
+WAKE_PORT = _env_int("WAKE_PORT", 9300)
+# How long the detector stays awake after the last wake signal.
+WAKE_HOLD_SECONDS = _env_float("WAKE_HOLD_SECONDS", 10.0)
+
+AUDIO_MODEL_PATH = Path(
+    os.getenv("AUDIO_MODEL_PATH", str(MODELS_DIR / "audio" / "audio_wake.onnx"))
+)
+AUDIO_WAKE_DEVICE = os.getenv("AUDIO_WAKE_DEVICE", "") or None  # sounddevice name/index
+AUDIO_WAKE_WINDOW_SECONDS = _env_float("AUDIO_WAKE_WINDOW_SECONDS", 5.0)
+AUDIO_WAKE_HOP_SECONDS = _env_float("AUDIO_WAKE_HOP_SECONDS", 0.5)
+# Empty -> use the threshold stored in the ONNX metadata (or 0.5).
+AUDIO_WAKE_THRESHOLD = os.getenv("AUDIO_WAKE_THRESHOLD", "")
+AUDIO_WAKE_THREADS = _env_int("AUDIO_WAKE_THREADS", 2)
+
+YOLO_MODEL_PATH = Path(
+    os.getenv("YOLO_MODEL_PATH", str(MODELS_DIR / "vision" / "yolo26n.pt"))
+)
+YOLO_IMGSZ = _env_int("YOLO_IMGSZ", 640)
+YOLO_CONF = _env_float("YOLO_CONF", 0.25)
+DETECTOR_SOURCE = os.getenv("DETECTOR_SOURCE", VIDEO_DEVICE)
+
 
 def ensure_runtime_dir() -> Path:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)

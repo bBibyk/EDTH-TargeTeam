@@ -2,3 +2,5 @@ streamlit>=1.50
 numpy>=1.24
 matplotlib>=3.7
 sounddevice>=0.4
+onnxruntime>=1.17
+ultralytics>=8.4
