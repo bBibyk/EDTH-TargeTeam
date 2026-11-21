@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import gi
+import numpy as np
 
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst
@@ -19,9 +22,15 @@ class PipelineStatus:
 
 
 class GstPipeline:
-    def __init__(self, name: str, description: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        on_created: Callable[[Gst.Pipeline], None] | None = None,
+    ) -> None:
         self.name = name
         self.description = description
+        self._on_created = on_created
         self._pipeline: Gst.Pipeline | None = None
         self._loop: GLib.MainLoop | None = None
         self._thread: threading.Thread | None = None
@@ -51,6 +60,8 @@ class GstPipeline:
         bus = pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message", self._on_message)
+        if self._on_created is not None:
+            self._on_created(pipeline)
 
         loop = GLib.MainLoop()
         self._loop = loop
@@ -123,6 +134,60 @@ def _configure_camera() -> None:
         return
 
 
+def _video_encode_and_send() -> str:
+    encode = (
+        f"x264enc tune=zerolatency speed-preset=ultrafast "
+        f"bitrate={config.X264_BITRATE_KBPS} key-int-max={config.VIDEO_FPS} "
+        f"bframes=0 byte-stream=true"
+    )
+    sink = (
+        f"rtph264pay config-interval=1 pt=96 ! "
+        f"udpsink host={config.PC_HOST} port={config.VIDEO_RTP_PORT} "
+        f"sync=false async=false"
+    )
+    return f"{encode} ! {sink}"
+
+
+def _video_source(fake: bool, video_file: str | None) -> str:
+    """Raw video source; caller adds the final caps."""
+    if video_file:
+        return (
+            f"filesrc location=\"{video_file}\" ! decodebin ! videoconvert ! "
+            f"videoscale ! videorate"
+        )
+    if fake:
+        return "videotestsrc is-live=true pattern=smpte"
+    return (
+        f"v4l2src device={config.VIDEO_DEVICE} do-timestamp=true ! "
+        f"image/jpeg,width={config.VIDEO_WIDTH},height={config.VIDEO_HEIGHT},"
+        f"framerate={config.VIDEO_FPS}/1 ! jpegdec ! videoconvert"
+    )
+
+
+def _raw_caps(fmt: str) -> str:
+    return (
+        f"video/x-raw,format={fmt},width={config.VIDEO_WIDTH},"
+        f"height={config.VIDEO_HEIGHT},framerate={config.VIDEO_FPS}/1"
+    )
+
+
+def build_video_capture_pipeline(fake: bool = False, video_file: str | None = None) -> str:
+    """Camera -> BGR frames for Python (detection mode)."""
+    return (
+        f"{_video_source(fake, video_file)} ! videoconvert ! {_raw_caps('BGR')} ! "
+        f"appsink name=capture-appsink emit-signals=true max-buffers=1 drop=true sync=false"
+    )
+
+
+def build_video_output_pipeline() -> str:
+    """BGR frames from Python (with boxes drawn) -> H.264 RTP to the PC."""
+    return (
+        f"appsrc name=output-appsrc is-live=true format=time do-timestamp=true "
+        f"caps=\"{_raw_caps('BGR')}\" ! queue max-size-buffers=2 leaky=downstream ! "
+        f"videoconvert ! video/x-raw,format=I420 ! {_video_encode_and_send()}"
+    )
+
+
 def build_video_sender_pipeline(fake: bool = False) -> str:
     sink = (
         f"rtph264pay config-interval=1 pt=96 ! "
@@ -172,17 +237,96 @@ def build_audio_sender_pipeline(fake: bool = False) -> str:
     return f"{source} ! {process} ! {encode} ! {sink}"
 
 
+class DetectionVideoSender:
+    """Camera -> Python (YOLO boxes drawn by `process_frame`) -> H.264 RTP.
+
+    Exposes the same start/stop/is_running/error surface as GstPipeline.
+    """
+
+    def __init__(
+        self,
+        process_frame: Callable[[np.ndarray], np.ndarray],
+        fake: bool = False,
+        video_file: str | None = None,
+    ) -> None:
+        self._process_frame = process_frame
+        self._appsrc: Any = None
+        self.output = GstPipeline(
+            "video-output", build_video_output_pipeline(), self._wire_output
+        )
+        self.capture = GstPipeline(
+            "video-capture",
+            build_video_capture_pipeline(fake, video_file),
+            self._wire_capture,
+        )
+
+    def _wire_output(self, pipeline: Gst.Pipeline) -> None:
+        self._appsrc = pipeline.get_by_name("output-appsrc")
+
+    def _wire_capture(self, pipeline: Gst.Pipeline) -> None:
+        pipeline.get_by_name("capture-appsink").connect("new-sample", self._on_sample)
+
+    def _on_sample(self, sink: Gst.Element) -> Gst.FlowReturn:
+        sample = sink.emit("pull-sample")
+        if sample is None or self._appsrc is None:
+            return Gst.FlowReturn.OK
+        buffer = sample.get_buffer()
+        ok, info = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            height, width = config.VIDEO_HEIGHT, config.VIDEO_WIDTH
+            rows = np.frombuffer(info.data, np.uint8).reshape(height, -1)  # rows may be padded
+            frame = rows[:, : width * 3].reshape(height, width, 3).copy()
+        finally:
+            buffer.unmap(info)
+        try:
+            frame = self._process_frame(frame)
+        except Exception as exc:  # noqa: BLE001 - never stall the video on a drawing error
+            print(f"overlay error: {exc}", flush=True)
+        self._appsrc.emit("push-buffer", Gst.Buffer.new_wrapped(frame.tobytes()))
+        return Gst.FlowReturn.OK
+
+    @property
+    def is_running(self) -> bool:
+        return self.output.is_running and self.capture.is_running
+
+    @property
+    def error(self) -> str:
+        return self.capture.error or self.output.error
+
+    def start(self) -> None:
+        self.output.start()
+        self.capture.start()
+
+    def stop(self) -> None:
+        self.capture.stop()
+        self.output.stop()
+
+
 class GstSender:
-    def __init__(self, fake: bool = False) -> None:
+    def __init__(
+        self,
+        fake: bool = False,
+        process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
+        video_file: str | None = None,
+    ) -> None:
         self.fake = fake
-        self.video: GstPipeline | None = None
+        self.process_frame = process_frame
+        self.video_file = video_file
+        self.video: GstPipeline | DetectionVideoSender | None = None
         self.audio: GstPipeline | None = None
 
     def start(self) -> bool:
         Gst.init(None)
-        if not self.fake:
+        if not self.fake and not self.video_file:
             _configure_camera()
-        self.video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
+        if self.process_frame is not None or self.video_file:
+            self.video = DetectionVideoSender(
+                self.process_frame or (lambda frame: frame), self.fake, self.video_file
+            )
+        else:
+            self.video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
         self.audio = GstPipeline("audio-sender", build_audio_sender_pipeline(self.fake))
         self.video.start()
         self.audio.start()

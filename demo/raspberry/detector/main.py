@@ -7,7 +7,7 @@ arrives, then runs YOLO26n on every frame for WAKE_HOLD_SECONDS after the last w
     python -m demo.raspberry.detector.main --source clip.mp4    # video file
     python -m demo.raspberry.detector.main --always-on --show   # no gating, preview window
 
-On the Pi 5 CPU, export once for speed and point --model at the export:
+Default model is the NCNN export at imgsz 320 (fastest on the Pi 5 CPU). Re-export with:
     yolo export model=models/vision/yolo26n.pt format=ncnn imgsz=320
 """
 from __future__ import annotations
@@ -24,30 +24,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from demo import config
-from demo.common.wake import WakeListener
-
-
-class WakeGate:
-    def __init__(self, hold_seconds: float) -> None:
-        self._hold = hold_seconds
-        self._awake_until = 0.0
-        self._lock = threading.Lock()
-
-    def wake(self, message: dict[str, Any]) -> None:
-        with self._lock:
-            was_awake = time.monotonic() < self._awake_until
-            self._awake_until = time.monotonic() + self._hold
-        if not was_awake:
-            print(
-                f"WAKE from {message.get('source')} (score={message.get('score')}) "
-                f"-> detector active for {self._hold:.0f}s",
-                flush=True,
-            )
-
-    @property
-    def awake(self) -> bool:
-        with self._lock:
-            return time.monotonic() < self._awake_until
+from demo.common.wake import WakeGate, WakeListener
 
 
 def _parse_source(source: str) -> int | str:

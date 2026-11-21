@@ -19,7 +19,21 @@ from demo.pc.state import AppState
 @st.cache_resource
 def _get_runtime() -> tuple[AppState, ControlClient, MjpegStreamServer]:
     state = AppState()
-    video_receiver = GstVideoReceiver(state.set_frame)
+    process_frame = None
+    if config.PC_DETECTION:
+        # Boxes drawn on the PC: detection runs on every received frame.
+        from demo.raspberry.detector.overlay import DetectionOverlay
+
+        overlay = DetectionOverlay(
+            config.YOLO_MODEL_PATH,
+            classes=config.DETECTION_CLASSES,
+            imgsz=config.YOLO_IMGSZ,
+            conf=config.YOLO_CONF,
+        )
+        overlay.start()
+        atexit.register(overlay.stop)
+        process_frame = overlay.process
+    video_receiver = GstVideoReceiver(state.set_frame, process_frame)
     audio_receiver = GstAudioReceiver(state.append_audio)
     video_receiver.start()
     audio_receiver.start()
@@ -102,5 +116,11 @@ def run() -> None:
             unsafe_allow_html=True,
         )
     with st.container(border=True):
-        st.caption("Model info here")
+        if config.PC_DETECTION:
+            st.caption(
+                f"Detection on PC: `{config.YOLO_MODEL_PATH.name}` @ {config.YOLO_IMGSZ}, "
+                f"classes: {', '.join(config.DETECTION_CLASSES)}"
+            )
+        else:
+            st.caption("Model info here")
     _render_audio(state)

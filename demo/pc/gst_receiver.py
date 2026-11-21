@@ -118,15 +118,33 @@ class GstReceiverPipeline:
                 loop.quit()
 
 
-def build_video_receiver_pipeline() -> str:
+def build_video_receiver_pipeline(raw_bgr: bool = False) -> str:
+    """H.264 RTP -> JPEG frames, or raw BGR frames when Python post-processes them."""
+    output = "video/x-raw,format=BGR" if raw_bgr else f"jpegenc quality={config.JPEG_QUALITY}"
     return (
         f"udpsrc port={config.VIDEO_RTP_PORT} "
         f'caps="application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000" ! '
         f"rtpjitterbuffer latency={config.GST_JITTERBUFFER_MS} drop-on-latency=true ! "
         f"rtph264depay ! h264parse ! avdec_h264 max-threads=1 ! "
-        f"videoconvert ! jpegenc quality={config.JPEG_QUALITY} ! "
+        f"videoconvert ! {output} ! "
         f"appsink name=video-appsink emit-signals=true max-buffers=1 drop=true sync=false"
     )
+
+
+def bgr_buffer_to_frame(data: bytes, width: int, height: int) -> np.ndarray:
+    """Raw BGR buffer (rows may be padded) -> writable HxWx3 array."""
+    rows = np.frombuffer(data, np.uint8).reshape(height, -1)
+    return rows[:, : width * 3].reshape(height, width, 3).copy()
+
+
+def annotate_to_jpeg(
+    frame: np.ndarray, process_frame: Callable[[np.ndarray], np.ndarray]
+) -> bytes:
+    import cv2
+
+    frame = process_frame(frame)
+    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY])
+    return encoded.tobytes() if ok else b""
 
 
 def build_audio_receiver_pipeline() -> str:
@@ -141,14 +159,36 @@ def build_audio_receiver_pipeline() -> str:
 
 
 class GstVideoReceiver(GstReceiverPipeline):
-    def __init__(self, on_frame: Callable[[bytes], None]) -> None:
-        super().__init__("video", build_video_receiver_pipeline(), self._handle_sample)
+    """Delivers JPEG frames to `on_frame`.
+
+    With `process_frame` (e.g. the YOLO overlay), frames are decoded to BGR, passed
+    through it, then JPEG-encoded in Python.
+    """
+
+    def __init__(
+        self,
+        on_frame: Callable[[bytes], None],
+        process_frame: Callable[[np.ndarray], np.ndarray] | None = None,
+    ) -> None:
+        super().__init__(
+            "video",
+            build_video_receiver_pipeline(raw_bgr=process_frame is not None),
+            self._handle_sample,
+        )
         self._on_frame = on_frame
+        self._process_frame = process_frame
 
     def _handle_sample(self, sample: Gst.Sample) -> None:
         data = _sample_to_bytes(sample)
-        if data:
-            self._on_frame(data)
+        if not data:
+            return
+        if self._process_frame is not None:
+            caps = sample.get_caps().get_structure(0)
+            frame = bgr_buffer_to_frame(data, caps.get_value("width"), caps.get_value("height"))
+            data = annotate_to_jpeg(frame, self._process_frame)
+            if not data:
+                return
+        self._on_frame(data)
 
 
 class GstAudioReceiver(GstReceiverPipeline):

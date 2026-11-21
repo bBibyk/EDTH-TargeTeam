@@ -11,6 +11,12 @@ GST_VIDEO_LOG_PATH = RUNTIME_DIR / "gst_video.log"
 GST_AUDIO_LOG_PATH = RUNTIME_DIR / "gst_audio.log"
 
 
+def _env_path(name: str, default: Path) -> Path:
+    """Path from env; relative paths are taken from the repo root, not the cwd."""
+    path = Path(os.getenv(name, "") or default)
+    return path if path.is_absolute() else ROOT_DIR / path
+
+
 def _env_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
@@ -77,9 +83,7 @@ WAKE_PORT = _env_int("WAKE_PORT", 9300)
 # How long the detector stays awake after the last wake signal.
 WAKE_HOLD_SECONDS = _env_float("WAKE_HOLD_SECONDS", 10.0)
 
-AUDIO_MODEL_PATH = Path(
-    os.getenv("AUDIO_MODEL_PATH", str(MODELS_DIR / "audio" / "audio_wake.onnx"))
-)
+AUDIO_MODEL_PATH = _env_path("AUDIO_MODEL_PATH", MODELS_DIR / "audio" / "audio_wake.onnx")
 AUDIO_WAKE_DEVICE = os.getenv("AUDIO_WAKE_DEVICE", "") or None  # sounddevice name/index
 AUDIO_WAKE_WINDOW_SECONDS = _env_float("AUDIO_WAKE_WINDOW_SECONDS", 5.0)
 AUDIO_WAKE_HOP_SECONDS = _env_float("AUDIO_WAKE_HOP_SECONDS", 0.5)
@@ -87,12 +91,18 @@ AUDIO_WAKE_HOP_SECONDS = _env_float("AUDIO_WAKE_HOP_SECONDS", 0.5)
 AUDIO_WAKE_THRESHOLD = os.getenv("AUDIO_WAKE_THRESHOLD", "")
 AUDIO_WAKE_THREADS = _env_int("AUDIO_WAKE_THREADS", 2)
 
-YOLO_MODEL_PATH = Path(
-    os.getenv("YOLO_MODEL_PATH", str(MODELS_DIR / "vision" / "yolo26n.pt"))
-)
-YOLO_IMGSZ = _env_int("YOLO_IMGSZ", 640)
+YOLO_MODEL_PATH = _env_path("YOLO_MODEL_PATH", MODELS_DIR / "vision" / "yolo26n_ncnn_model")
+# NCNN export is fastest on the Pi 5 CPU; it was exported at 320, keep these in sync.
+YOLO_IMGSZ = _env_int("YOLO_IMGSZ", 320)
 YOLO_CONF = _env_float("YOLO_CONF", 0.25)
 DETECTOR_SOURCE = os.getenv("DETECTOR_SOURCE", VIDEO_DEVICE)
+
+# Boxes drawn on the streamed video by the Raspberry sender.
+DETECTION_ENABLED = os.getenv("DETECTION_ENABLED", "1") == "1"
+DETECTION_ALWAYS_ON = os.getenv("DETECTION_ALWAYS_ON", "0") == "1"  # ignore audio wake
+DETECTION_CLASSES = os.getenv("DETECTION_CLASSES", "person").split()
+# Run the detector on the PC on received video instead (scripts/run_pc_detection.sh).
+PC_DETECTION = os.getenv("PC_DETECTION", "0") == "1"
 
 
 def ensure_runtime_dir() -> Path:

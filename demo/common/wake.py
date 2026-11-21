@@ -88,3 +88,26 @@ class WakeListener:
         if self._socket is not None:
             self._socket.close()
             self._socket = None
+
+
+class WakeGate:
+    def __init__(self, hold_seconds: float) -> None:
+        self._hold = hold_seconds
+        self._awake_until = 0.0
+        self._lock = threading.Lock()
+
+    def wake(self, message: dict[str, Any]) -> None:
+        with self._lock:
+            was_awake = time.monotonic() < self._awake_until
+            self._awake_until = time.monotonic() + self._hold
+        if not was_awake:
+            print(
+                f"WAKE from {message.get('source')} (score={message.get('score')}) "
+                f"-> detector active for {self._hold:.0f}s",
+                flush=True,
+            )
+
+    @property
+    def awake(self) -> bool:
+        with self._lock:
+            return time.monotonic() < self._awake_until
