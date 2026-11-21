@@ -63,5 +63,14 @@ def render(state: AppState) -> None:
     st.pyplot(figure, width="stretch")
     plt.close(figure)
 
-    with st.container(border=True):
-        st.caption("Model info here")
+    result = state.get_audio_model_result()
+    with st.container(border=True, height=90):
+        if result:
+            label = result.get("class", "unknown")
+            probs = result.get("probabilities", {})
+            prob_text = " | ".join(f"{k}: {float(v):.2f}" for k, v in probs.items())
+            st.write(f"**Audio model:** {label}")
+            st.caption(prob_text or "No probabilities")
+        else:
+            st.write("**Audio model:** waiting for result...")
+            st.caption("EfficientAT (vehicle/drone/footsteps/background)")

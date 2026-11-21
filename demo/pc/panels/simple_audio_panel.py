@@ -41,5 +41,14 @@ def render(state: AppState) -> None:
     st.pyplot(figure, width="stretch")
     plt.close(figure)
 
-    with st.container(border=True):
-        st.caption("Model info here")
+    with st.container(border=True, height=90):
+        if samples.size == 0:
+            st.write("**Wake:** waiting for audio...")
+            st.caption("RMS threshold detection")
+        else:
+            level = float(np.sqrt(np.mean(pcm16_to_float(samples) ** 2)))
+            threshold = config.AUDIO_RMS_WAKE_THRESHOLD
+            awake = level >= threshold
+            label = "WAKE" if awake else "idle"
+            st.write(f"**Wake:** {label}  (rms={level:.3f}, threshold={threshold:.2f})")
+            st.caption("RMS threshold detection")

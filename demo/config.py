@@ -33,6 +33,7 @@ VIDEO_RTP_PORT = _env_int("VIDEO_RTP_PORT", 9100)
 AUDIO_RTP_PORT = _env_int("AUDIO_RTP_PORT", 9102)
 VIDEO_HTTP_PORT = _env_int("VIDEO_HTTP_PORT", 8080)
 DETECTION_PORT = _env_int("DETECTION_PORT", 9201)
+AUDIO_RESULT_PORT = _env_int("AUDIO_RESULT_PORT", 9202)
 
 VIDEO_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video4")
 AUDIO_DEVICE = os.getenv("AUDIO_DEVICE", "default")
@@ -88,8 +89,8 @@ WAKE_PORT = _env_int("WAKE_PORT", 9300)
 # How long the detector stays awake after the last wake signal.
 WAKE_HOLD_SECONDS = _env_float("WAKE_HOLD_SECONDS", 10.0)
 
-AUDIO_MODEL_PATH = Path(
-    os.getenv("AUDIO_MODEL_PATH", str(MODELS_DIR / "audio" / "audio_wake.onnx"))
+AUDIO_WAKE_MODEL_PATH = Path(
+    os.getenv("AUDIO_WAKE_MODEL_PATH", str(MODELS_DIR / "audio" / "audio_wake.onnx"))
 )
 AUDIO_WAKE_DEVICE = os.getenv("AUDIO_WAKE_DEVICE", "") or None  # sounddevice name/index
 AUDIO_WAKE_WINDOW_SECONDS = _env_float("AUDIO_WAKE_WINDOW_SECONDS", 5.0)
@@ -101,6 +102,29 @@ AUDIO_WAKE_THREADS = _env_int("AUDIO_WAKE_THREADS", 2)
 YOLO_MODEL_PATH = Path(
     os.getenv("YOLO_MODEL_PATH", str(MODELS_DIR / "vision" / "yolo26n.pt"))
 )
+if not YOLO_MODEL_PATH.is_absolute():
+    YOLO_MODEL_PATH = ROOT_DIR / YOLO_MODEL_PATH
+
+AUDIO_EVENT_MODEL_PATH = Path(
+    os.getenv(
+        "AUDIO_EVENT_MODEL_PATH",
+        str(MODELS_DIR / "audio" / "raspberry_pi" / "efficientat_audio_v1.onnx"),
+    )
+)
+if not AUDIO_EVENT_MODEL_PATH.is_absolute():
+    AUDIO_EVENT_MODEL_PATH = ROOT_DIR / AUDIO_EVENT_MODEL_PATH
+AUDIO_EVENT_MEL_BASIS_PATH = Path(
+    os.getenv(
+        "AUDIO_EVENT_MEL_BASIS_PATH",
+        str(MODELS_DIR / "audio" / "raspberry_pi" / "mel_basis.npy"),
+    )
+)
+if not AUDIO_EVENT_MEL_BASIS_PATH.is_absolute():
+    AUDIO_EVENT_MEL_BASIS_PATH = ROOT_DIR / AUDIO_EVENT_MEL_BASIS_PATH
+
+AUDIO_RMS_WAKE_THRESHOLD = _env_float("AUDIO_RMS_WAKE_THRESHOLD", 0.5)
+AUDIO_VEHICLE_PROB_THRESHOLD = _env_float("AUDIO_VEHICLE_PROB_THRESHOLD", 0.5)
+VIDEO_WAKE_HOLD_SECONDS = _env_float("VIDEO_WAKE_HOLD_SECONDS", 10.0)
 YOLO_IMGSZ = _env_int("YOLO_IMGSZ", 640)
 YOLO_CONF = _env_float("YOLO_CONF", 0.25)
 DETECTOR_SOURCE = os.getenv("DETECTOR_SOURCE", VIDEO_DEVICE)

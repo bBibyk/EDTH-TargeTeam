@@ -12,6 +12,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst
 
 from demo import config
+from demo.raspberry.audio_result_sender import AudioResultSender
 from demo.raspberry.detection_sender import DetectionSender
 
 
@@ -170,10 +171,7 @@ def build_audio_sender_pipeline(fake: bool = False) -> str:
         f"port={config.AUDIO_RTP_PORT} sync=false async=false"
     )
     if fake:
-        source = (
-            "audiotestsrc is-live=true wave=sine freq=440 ! "
-            "audio/x-raw,rate=48000,channels=1"
-        )
+        source = "audiotestsrc is-live=true wave=sine freq=440"
     elif config.AUDIO_INPUT_FORMAT == "pulse":
         source = f"pulsesrc device={config.AUDIO_DEVICE} do-timestamp=true"
     elif config.AUDIO_INPUT_FORMAT == "alsa":
@@ -183,7 +181,17 @@ def build_audio_sender_pipeline(fake: bool = False) -> str:
 
     process = "audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1"
     encode = f"opusenc bitrate={config.OPUS_BITRATE} audio-type=voice"
-    return f"{source} ! {process} ! {encode} ! {sink}"
+    model_tap = (
+        "queue leaky=downstream max-size-buffers=200 ! "
+        "audioconvert ! audioresample ! "
+        "audio/x-raw,format=S16LE,rate=32000,channels=1 ! "
+        "appsink name=audio-model-appsink emit-signals=true max-buffers=200 drop=true sync=false"
+    )
+    return (
+        f"{source} ! tee name=ta "
+        f"ta. ! queue ! {process} ! {encode} ! {sink} "
+        f"ta. ! {model_tap}"
+    )
 
 
 class GstSender:
@@ -197,18 +205,25 @@ class GstSender:
         self._detection_thread: threading.Thread | None = None
         self._detection_stop = threading.Event()
         self._frame_count = 0
+        self._audio_model = None
+        self._audio_result_sender: AudioResultSender | None = None
+        self._audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
+        self._audio_thread: threading.Thread | None = None
+        self._audio_stop = threading.Event()
+        self._video_active = threading.Event()
+        self._last_vehicle_time = 0.0
+        self._wake_lock = threading.Lock()
 
     def start(self) -> bool:
         Gst.init(None)
         if not self.fake:
             _configure_camera()
         self._start_detector()
-        self.video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
+        self._start_audio_model()
         self.audio = GstPipeline("audio-sender", build_audio_sender_pipeline(self.fake))
-        self.video.start()
         self.audio.start()
-        self._attach_yolo_sink()
-        return self.video.is_running and self.audio.is_running
+        self._attach_audio_model_sink()
+        return self.audio.is_running
 
     def status(self) -> dict[str, object]:
         return {
@@ -217,16 +232,25 @@ class GstSender:
             "video_error": self.video.error if self.video else "",
             "audio_error": self.audio.error if self.audio else "",
             "yolo_enabled": self._detector is not None,
+            "audio_model_enabled": self._audio_model is not None,
+            "video_active": self._video_active.is_set(),
         }
 
     def stop(self) -> None:
         self._detection_stop.set()
+        self._audio_stop.set()
         if self._detection_thread is not None and self._detection_thread.is_alive():
             self._detection_thread.join(timeout=2.0)
             self._detection_thread = None
+        if self._audio_thread is not None and self._audio_thread.is_alive():
+            self._audio_thread.join(timeout=2.0)
+            self._audio_thread = None
         if self._detection_sender is not None:
             self._detection_sender.close()
             self._detection_sender = None
+        if self._audio_result_sender is not None:
+            self._audio_result_sender.close()
+            self._audio_result_sender = None
         if self.video is not None:
             self.video.stop()
         if self.audio is not None:
@@ -270,6 +294,8 @@ class GstSender:
         appsink.connect("new-sample", self._on_yolo_sample)
 
     def _on_yolo_sample(self, sink: Gst.Element) -> Gst.FlowReturn:
+        if not self._video_active.is_set():
+            return Gst.FlowReturn.OK
         sample = sink.emit("pull-sample")
         if sample is None:
             return Gst.FlowReturn.OK
@@ -314,3 +340,148 @@ class GstSender:
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"YOLO inference error: {exc}", flush=True)
+
+    def _start_audio_model(self) -> None:
+        self._audio_result_sender = AudioResultSender(
+            config.PC_HOST, config.AUDIO_RESULT_PORT
+        )
+        model_path = config.AUDIO_EVENT_MODEL_PATH
+        mel_path = config.AUDIO_EVENT_MEL_BASIS_PATH
+        if not model_path.exists() or not mel_path.exists():
+            print(f"Audio model not found: {model_path}", flush=True)
+        else:
+            try:
+                from demo.raspberry.audio_model import EfficientATAudioModel
+
+                self._audio_model = EfficientATAudioModel(model_path, mel_path)
+                print(f"Audio model enabled: {model_path}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Audio model disabled: {exc}", flush=True)
+                self._audio_model = None
+        self._audio_stop.clear()
+        self._audio_thread = threading.Thread(
+            target=self._audio_model_loop, name="audio-model-worker", daemon=True
+        )
+        self._audio_thread.start()
+
+    def _start_video_if_needed(self) -> None:
+        with self._wake_lock:
+            if self._video_active.is_set():
+                self._last_vehicle_time = __import__("time").monotonic()
+                return
+            if not self.fake:
+                _configure_camera()
+            self.video = GstPipeline("video-sender", build_video_sender_pipeline(self.fake))
+            self.video.start()
+            self._attach_yolo_sink()
+            self._video_active.set()
+            self._last_vehicle_time = __import__("time").monotonic()
+            print("Video activated by audio model", flush=True)
+
+    def _maybe_stop_video(self) -> None:
+        with self._wake_lock:
+            if not self._video_active.is_set():
+                return
+            if __import__("time").monotonic() - self._last_vehicle_time < config.VIDEO_WAKE_HOLD_SECONDS:
+                return
+            self._video_active.clear()
+            if self.video is not None:
+                self.video.stop()
+                self.video = None
+            print("Video deactivated (no vehicle)", flush=True)
+
+    def _attach_audio_model_sink(self) -> None:
+        if self.audio is None or self._audio_model is None:
+            return
+        appsink = self.audio.get_element("audio-model-appsink")
+        if appsink is None:
+            return
+        appsink.connect("new-sample", self._on_audio_model_sample)
+
+    def _on_audio_model_sample(self, sink: Gst.Element) -> Gst.FlowReturn:
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        buffer = sample.get_buffer()
+        ok, map_info = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            data = np.frombuffer(map_info.data, dtype=np.int16).copy()
+        finally:
+            buffer.unmap(map_info)
+        if data.size == 0:
+            return Gst.FlowReturn.OK
+        try:
+            self._audio_queue.put_nowait(data)
+        except queue.Full:
+            try:
+                self._audio_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._audio_queue.put_nowait(data)
+            except queue.Full:
+                pass
+        return Gst.FlowReturn.OK
+
+    def _audio_model_loop(self) -> None:
+        window = np.zeros(64000, dtype=np.float32)
+        filled = 0
+        since_infer = 0
+        infer_every = 16000
+        rms_threshold = config.AUDIO_RMS_WAKE_THRESHOLD
+        vehicle_threshold = config.AUDIO_VEHICLE_PROB_THRESHOLD
+        while not self._audio_stop.is_set():
+            try:
+                chunk = self._audio_queue.get(timeout=0.2)
+            except queue.Empty:
+                self._maybe_stop_video()
+                continue
+            samples = chunk.astype(np.float32) / 32768.0
+            n = samples.size
+            if n >= window.size:
+                window[:] = samples[-window.size :]
+                filled = window.size
+            else:
+                window = np.roll(window, -n)
+                window[-n:] = samples
+                filled = min(window.size, filled + n)
+            since_infer += n
+            if filled < window.size or since_infer < infer_every:
+                continue
+            since_infer = 0
+            rms = float(np.sqrt(np.mean(samples ** 2)))
+            if rms < rms_threshold:
+                self._maybe_stop_video()
+                if self._audio_result_sender is not None:
+                    self._audio_result_sender.send(
+                        {"class": "background", "wake": False, "rms": rms, "probabilities": {}}
+                    )
+                continue
+            if self._audio_result_sender is None:
+                continue
+            if self._audio_model is None:
+                self._audio_result_sender.send(
+                    {"class": "model_disabled", "wake": True, "rms": rms, "probabilities": {}}
+                )
+                continue
+            try:
+                result = self._audio_model.predict(window.copy())
+                result["wake"] = True
+                result["rms"] = rms
+                probs = result.get("probabilities", {})
+                vehicle_prob = float(probs.get("vehicle", 0.0))
+                drone_prob = float(probs.get("drone", 0.0))
+                footsteps_prob = float(probs.get("footsteps", 0.0))
+                if (
+                    vehicle_prob >= vehicle_threshold
+                    or drone_prob >= vehicle_threshold
+                    or footsteps_prob >= vehicle_threshold
+                ):
+                    self._start_video_if_needed()
+                else:
+                    self._maybe_stop_video()
+                self._audio_result_sender.send(result)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Audio model error: {exc}", flush=True)

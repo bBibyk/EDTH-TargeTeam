@@ -20,6 +20,8 @@ class AppState:
         self._detections: list[dict[str, Any]] = []
         self._detection_frame_size: tuple[int, int] = (0, 0)
         self._last_detection_time = 0.0
+        self._audio_model_result: dict[str, Any] | None = None
+        self._last_audio_model_time = 0.0
         self.last_command = ""
         self.last_response: dict[str, Any] | None = None
         self.last_error = ""
@@ -55,6 +57,17 @@ class AppState:
             if time.monotonic() - self._last_detection_time > 2.0:
                 return [], (0, 0)
             return list(self._detections), self._detection_frame_size
+
+    def set_audio_model_result(self, result: dict[str, Any]) -> None:
+        with self._lock:
+            self._audio_model_result = result
+            self._last_audio_model_time = time.monotonic()
+
+    def get_audio_model_result(self) -> dict[str, Any] | None:
+        with self._lock:
+            if time.monotonic() - self._last_audio_model_time > 5.0:
+                return None
+            return dict(self._audio_model_result) if self._audio_model_result else None
 
     def video_is_live(self) -> bool:
         with self._lock:

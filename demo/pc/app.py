@@ -6,6 +6,7 @@ import streamlit as st
 
 from demo import config
 from demo.common.control import ControlClient
+from demo.pc.audio_result_receiver import AudioResultReceiver
 from demo.pc.detection_receiver import DetectionReceiver
 from demo.pc.gst_receiver import GstAudioReceiver, GstVideoReceiver
 from demo.pc.mjpeg_server import MjpegStreamServer
@@ -33,10 +34,16 @@ def _get_runtime() -> tuple[AppState, ControlClient, MjpegStreamServer]:
     )
     detection_receiver.start()
 
+    audio_result_receiver = AudioResultReceiver(
+        "0.0.0.0", config.AUDIO_RESULT_PORT, state.set_audio_model_result
+    )
+    audio_result_receiver.start()
+
     atexit.register(video_receiver.stop)
     atexit.register(audio_receiver.stop)
     atexit.register(mjpeg_server.stop)
     atexit.register(detection_receiver.stop)
+    atexit.register(audio_result_receiver.stop)
 
     control_client = ControlClient(
         config.RBP_HOST,
@@ -47,12 +54,10 @@ def _get_runtime() -> tuple[AppState, ControlClient, MjpegStreamServer]:
 
 
 @st.fragment(run_every=max(config.UI_REFRESH_SECONDS * 5, 0.1))
-def _render_audio(state: AppState) -> None:
-    simple_column, advanced_column = st.columns(2)
-    with simple_column:
-        simple_audio_panel.render(state)
-    with advanced_column:
-        advanced_audio_panel.render(state)
+def _render_left(state: AppState) -> None:
+    simple_audio_panel.render(state)
+    st.divider()
+    advanced_audio_panel.render(state)
 
 
 def run() -> None:
@@ -72,6 +77,7 @@ def run() -> None:
         st.write(f"Video RTP: `{config.PC_HOST}:{config.VIDEO_RTP_PORT}`")
         st.write(f"Audio RTP: `{config.PC_HOST}:{config.AUDIO_RTP_PORT}`")
         st.write(f"Detection TCP: `0.0.0.0:{config.DETECTION_PORT}`")
+        st.write(f"Audio model TCP: `0.0.0.0:{config.AUDIO_RESULT_PORT}`")
         st.write(f"Control TCP: `{config.RBP_HOST}:{config.CONTROL_PORT}`")
         st.divider()
         st.header("Capture")
@@ -85,30 +91,19 @@ def run() -> None:
         st.caption("Start the Raspberry side first, then this dashboard.")
 
     st.title("Drone Demo")
-    st.caption(
-        "Simulated drone video, audio, and command link. "
-        "No real detection is performed; model outputs are placeholders."
-    )
+    st.caption("Sound-first pipeline: RMS wake -> mel/vehicle model -> video+YOLO.")
 
-    @st.fragment(run_every=1.0)
-    def _render_status() -> None:
-        s = state.status()
-        video_label = "live" if s["video_live"] else "waiting"
-        audio_label = "live" if s["audio_live"] else "waiting"
-        st.markdown(f"**Video:** {video_label} | **Audio:** {audio_label}")
-        if mjpeg_server.is_running and not s["video_live"]:
-            st.info("Waiting for video stream...")
-
-    _render_status()
-
-    st.subheader("Video")
-    if not mjpeg_server.is_running:
-        st.error(f"MJPEG server unavailable: {mjpeg_server.error}")
-    else:
-        st.markdown(
-            f'<img src="{stream_url}" style="width:60%; max-width:900px; border-radius:8px;" />',
-            unsafe_allow_html=True,
-        )
-    with st.container(border=True):
-        st.caption("Model info here")
-    _render_audio(state)
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        _render_left(state)
+    with right:
+        st.subheader("Video")
+        if not mjpeg_server.is_running:
+            st.error(f"MJPEG server unavailable: {mjpeg_server.error}")
+        else:
+            st.markdown(
+                f'<img src="{stream_url}" style="width:100%; border-radius:8px;" />',
+                unsafe_allow_html=True,
+            )
+        with st.container(border=True):
+            st.caption("Model info here")
