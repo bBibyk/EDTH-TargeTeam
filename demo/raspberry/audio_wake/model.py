@@ -1,13 +1,15 @@
 """Audio wake model wrapper.
 
-`AUDIO_MODEL_PATH` (default `models/audio/raspberry_pi`) can be:
-- a folder with an .onnx + `mel_basis.npy` -> the EfficientAT classifier (efficientat.py),
-- a single .onnx with the older spectrogram-image contract (see models/audio/README.md).
-If neither exists, a clearly-labelled RMS-energy placeholder is used so the
-wake -> detector chain can be tested end to end.
+`AUDIO_MODEL_PATH` can be:
+- a drone_audio_detector model dir (`model.json` + .onnx) -> native.py wrapper,
+- a legacy EfficientAT folder (.onnx + `mel_basis.npy`) -> efficientat.py,
+- a single legacy .onnx with the older spectrogram-image contract.
+If nothing is found, a clearly-labelled RMS-energy placeholder is used.
 """
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -67,12 +69,68 @@ class PlaceholderEnergyModel(AudioWakeModel):
         return float(1.0 / (1.0 + np.exp(-(dbfs - self._mid) / 3.0)))
 
 
+def _find_drone_audio_detector_root(path: Path) -> Path | None:
+    candidates = [path, *path.parents]
+    for candidate in candidates:
+        if (candidate / "drone_audio" / "native.py").is_file():
+            return candidate
+    return None
+
+
+def _is_drone_audio_detector_model(path: Path) -> bool:
+    if path.is_dir() and (path / "model.json").is_file():
+        return True
+    return path.is_file() and path.name == "model.json"
+
+
+class DroneAudioDetectorWakeModel(AudioWakeModel):
+    sample_rate = 16000
+    window_seconds = 5.0
+
+    def __init__(self, path: Path, threads: int = 4, wake_classes: tuple[str, ...] = ("drone",)) -> None:
+        model_dir = path if path.is_dir() else path.parent
+        root = _find_drone_audio_detector_root(model_dir)
+        if root is None:
+            raise FileNotFoundError(f"drone_audio/native.py not found near {path}")
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+
+        from drone_audio.native import load_native_model
+
+        self._model = load_native_model(model_dir, threads=threads)
+        meta_path = model_dir / "model.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
+        self.classes = tuple(meta.get("classes", ("drone", "vehicle", "other")))
+        unknown = [c for c in wake_classes if c not in self.classes]
+        if unknown or not wake_classes:
+            raise ValueError(f"wake classes must be some of {self.classes}, got {list(wake_classes)}")
+        self.wake_classes = tuple(wake_classes)
+        self.threshold = float(getattr(self._model, "thr", meta.get("thr", 0.5)))
+        self.name = f"drone_audio_detector[{'+'.join(self.wake_classes)}]"
+        self.last_probabilities: dict[str, float] = {}
+
+    def predict(self, samples: np.ndarray) -> float:
+        x = np.asarray(samples, dtype=np.float32).reshape(-1)
+        needed = int(self.sample_rate * self.window_seconds)
+        if x.shape[0] > needed:
+            x = x[-needed:]
+        elif x.shape[0] < needed:
+            x = np.pad(x, (0, needed - x.shape[0]))
+        p_drone, p3 = self._model(x)
+        probs = [float(v) for v in np.asarray(p3, dtype=np.float32).reshape(-1)]
+        self.last_probabilities = {c: probs[i] for i, c in enumerate(self.classes)}
+        return float(sum(self.last_probabilities.get(c, 0.0) for c in self.wake_classes))
+
+
 def load_audio_wake_model(
     path: Path, threads: int = 4, wake_classes: tuple[str, ...] = ("drone",)
 ) -> AudioWakeModel:
     from demo.raspberry.audio_wake.efficientat import EfficientAtModel, find_efficientat_onnx
 
-    efficientat = find_efficientat_onnx(path)  # folder with mel_basis.npy (current model)
+    if _is_drone_audio_detector_model(path):
+        return DroneAudioDetectorWakeModel(path, threads=threads, wake_classes=wake_classes)
+
+    efficientat = find_efficientat_onnx(path)  # legacy folder with mel_basis.npy
     if efficientat is not None:
         return EfficientAtModel(efficientat, wake_classes=wake_classes, threads=threads)
     if path.is_file():

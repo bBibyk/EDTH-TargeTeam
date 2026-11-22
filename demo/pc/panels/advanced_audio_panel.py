@@ -73,4 +73,4 @@ def render(state: AppState) -> None:
             st.caption(prob_text or "No probabilities")
         else:
             st.write("**Audio model:** waiting for result...")
-            st.caption("EfficientAT (vehicle/drone/footsteps/background)")
+            st.caption("drone_audio_detector (drone/vehicle/other)")

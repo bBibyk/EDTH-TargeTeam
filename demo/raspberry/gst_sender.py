@@ -195,7 +195,7 @@ def build_audio_sender_pipeline(fake: bool = False) -> str:
     model_tap = (
         "queue leaky=downstream max-size-buffers=200 ! "
         "audioconvert ! audioresample ! "
-        "audio/x-raw,format=S16LE,rate=32000,channels=1 ! "
+        "audio/x-raw,format=S16LE,rate=16000,channels=1 ! "
         "appsink name=audio-model-appsink emit-signals=true max-buffers=200 drop=true sync=false"
     )
     return (
@@ -369,13 +369,17 @@ class GstSender:
         )
         model_path = config.AUDIO_EVENT_MODEL_PATH
         mel_path = config.AUDIO_EVENT_MEL_BASIS_PATH
-        if not model_path.exists() or not mel_path.exists():
+        if not model_path.exists():
             print(f"Audio model not found: {model_path}", flush=True)
         else:
             try:
-                from demo.raspberry.audio_model import EfficientATAudioModel
+                from demo.raspberry.audio_model import DroneAudioModel
 
-                self._audio_model = EfficientATAudioModel(model_path, mel_path)
+                self._audio_model = DroneAudioModel(
+                    model_path,
+                    mel_path,
+                    threads=config.AUDIO_WAKE_THREADS,
+                )
                 print(f"Audio model enabled: {model_path}", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"Audio model disabled: {exc}", flush=True)
@@ -505,12 +509,19 @@ class GstSender:
         return Gst.FlowReturn.OK
 
     def _audio_model_loop(self) -> None:
-        window = np.zeros(64000, dtype=np.float32)
+        model_sr = int(getattr(self._audio_model, "sample_rate", 16000))
+        window_samples = int(getattr(self._audio_model, "window_samples", model_sr * 5))
+        window = np.zeros(window_samples, dtype=np.float32)
         filled = 0
         since_infer = 0
-        infer_every = 16000
+        infer_every = max(1, int(config.AUDIO_WAKE_HOP_SECONDS * model_sr))
         rms_threshold = config.AUDIO_RMS_WAKE_THRESHOLD
-        vehicle_threshold = config.AUDIO_VEHICLE_PROB_THRESHOLD
+        wake_classes = tuple(getattr(config, "AUDIO_WAKE_CLASSES", ("drone",)))
+        wake_threshold = None
+        if config.AUDIO_WAKE_THRESHOLD:
+            wake_threshold = float(config.AUDIO_WAKE_THRESHOLD)
+        elif self._audio_model is not None:
+            wake_threshold = float(getattr(self._audio_model, "threshold", 0.5))
         while not self._audio_stop.is_set():
             try:
                 chunk = self._audio_queue.get(timeout=0.2)
@@ -547,17 +558,16 @@ class GstSender:
                 continue
             try:
                 result = self._audio_model.predict(window.copy())
-                result["wake"] = True
                 result["rms"] = rms
                 probs = result.get("probabilities", {})
-                vehicle_prob = float(probs.get("vehicle", 0.0))
-                drone_prob = float(probs.get("drone", 0.0))
-                footsteps_prob = float(probs.get("footsteps", 0.0))
-                if (
-                    vehicle_prob >= vehicle_threshold
-                    or drone_prob >= vehicle_threshold
-                    or footsteps_prob >= vehicle_threshold
-                ):
+                wake_score = float(sum(float(probs.get(c, 0.0)) for c in wake_classes))
+                result["wake_score"] = wake_score
+                result["wake_classes"] = list(wake_classes)
+                if wake_threshold is not None:
+                    result["wake_threshold"] = wake_threshold
+                wake_triggered = wake_threshold is None or wake_score >= wake_threshold
+                result["wake"] = wake_triggered
+                if wake_triggered:
                     self._start_video_if_needed()
                 else:
                     self._maybe_stop_video()

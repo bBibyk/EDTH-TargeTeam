@@ -35,7 +35,7 @@ flowchart LR
   subgraph PI["Raspberry Pi 5 (on the drone)"]
     CAM["USB camera<br/>MJPEG 640×480 @ 30 fps"] --> SEND["run_rbp.sh<br/>GStreamer sender"]
     MIC["STM32 board mic (USB serial)<br/>or the camera mic"] --> SEND
-    SEND -->|"last 2 s, every 0.5 s"| AUD["EfficientAT audio model<br/>ONNX, CPU"]
+    SEND -->|"last 5 s, every 0.5 s"| AUD["drone_audio_detector model<br/>ONNX, CPU"]
     AUD -->|"vehicle / drone / footsteps"| WAKE(("switch video on"))
     SEND -->|"every 3rd frame"| YOLO["YOLO26n<br/>NCNN, CPU"]
   end
@@ -56,7 +56,7 @@ flowchart LR
 
 1. reads the microphone (the STM32 board when `AUDIO_INPUT_FORMAT=stm32`), compresses it to Opus and sends it to the Demo PC;
 2. every 0.5 s, if the sound is louder than `AUDIO_RMS_WAKE_THRESHOLD`, runs the audio model on the last 2 s and sends the result to the PC;
-3. when the model gives vehicle, drone or footsteps ≥ `AUDIO_VEHICLE_PROB_THRESHOLD`, switches the camera on; it switches off again `VIDEO_WAKE_HOLD_SECONDS` after the last such result;
+3. when the wake score from `AUDIO_WAKE_CLASSES` reaches `AUDIO_WAKE_THRESHOLD` (default: model threshold), switches the camera on; it switches off again `VIDEO_WAKE_HOLD_SECONDS` after the last wake;
 4. while the camera is on: compresses its JPEG frames to H.264, sends them as RTP over UDP, and copies every 3rd frame to YOLO26n, whose boxes go to the PC;
 5. listens for commands from the Demo PC.
 
@@ -220,8 +220,8 @@ Each machine has its **own** `demo/.env`, copied from
 | `AUDIO_INPUT_FORMAT` / `AUDIO_DEVICE` | Pi | `stm32` for the STM32 board ([stm32/mic_stream](../stm32/mic_stream/README.md)), or `pulse` / `default` for the system's default mic |
 | `STM32_MIC_PORT` / `STM32_MIC_BAUD` | Pi | Empty (auto-detect the board's ST-LINK port) / `1000000` |
 | `AUDIO_RMS_WAKE_THRESHOLD` | Pi | `0.03` (−30 dBFS). Quieter sound is reported as background without running the model |
-| `AUDIO_VEHICLE_PROB_THRESHOLD` / `VIDEO_WAKE_HOLD_SECONDS` | Pi | `0.5` / `10.0`: when the camera goes on, and how long it stays on |
-| `AUDIO_EVENT_MODEL_PATH` / `AUDIO_EVENT_MEL_BASIS_PATH` | Pi | `models/audio/raspberry_pi/efficientat_audio_v1.onnx` / `.../mel_basis.npy` |
+| `AUDIO_WAKE_CLASSES` / `AUDIO_WAKE_THRESHOLD` / `VIDEO_WAKE_HOLD_SECONDS` | Pi | Wake classes (default `drone`), wake score threshold (empty = model threshold), and how long camera stays on |
+| `AUDIO_EVENT_MODEL_PATH` / `AUDIO_WAKE_MODEL_PATH` | Pi | `models/audio/drone_audio_detector/model` (drone_audio_detector dir) |
 | `YOLO_MODEL_PATH` | Pi | `models/vision/yolo26n_ncnn_model`, relative to the repository root |
 | `YOLO_FRAME_INTERVAL` | Pi | `3` = analyse every 3rd frame (10 per second at 30 fps) |
 | `YOLO_CONFIDENCE` / `YOLO_IOU` / `YOLO_MAX_DET` | Pi | `0.4` / `0.5` / `20` |
@@ -389,7 +389,7 @@ wakes up the visual detector:
 
 | Script | What it does |
 |---|---|
-| [run_audio_wake.sh](../demo/scripts/run_audio_wake.sh) | Listens to the mic at 32 kHz and, every 0.5 s, scores the last 2 s with the EfficientAT model in `models/audio/raspberry_pi` (classes: background, vehicle, drone, footsteps; about 10 ms per window on the Pi). When the drone probability (`AUDIO_WAKE_CLASSES`) is at least `AUDIO_WAKE_THRESHOLD` (default 0.5), it sends a UDP "wake" message to port 9300 on the Pi itself. Add `--verbose` to print every class's probability, or `--wav clip.wav` to replay a recording |
+| [run_audio_wake.sh](../demo/scripts/run_audio_wake.sh) | Listens to the mic at 16 kHz and, every 0.5 s, scores the last 5 s with the drone_audio_detector model in `models/audio/drone_audio_detector/model` (classes: drone, vehicle, other). When the wake score (`AUDIO_WAKE_CLASSES`, default `drone`) is at least `AUDIO_WAKE_THRESHOLD` (default: model threshold), it sends a UDP "wake" message to port 9300 on the Pi itself. Add `--verbose` to print every class's probability, or `--wav clip.wav` to replay a recording |
 | [run_detector.sh](../demo/scripts/run_detector.sh) | YOLO on the camera, but only for `WAKE_HOLD_SECONDS` after a wake. Logs detections; doesn't stream to the PC |
 
 `run_detector.sh` needs the camera, so it can't run while `run_rbp.sh` does.

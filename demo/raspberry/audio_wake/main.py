@@ -1,9 +1,9 @@
 """Audio wake program: microphone -> audio wake model -> WAKE signal to the detector.
 
-Keeps a sliding window (the length the model is trained on: 2 s at 32 kHz for the
-EfficientAT model), scores it every hop (default 0.5 s) and sends a UDP wake datagram
-whenever the score crosses the threshold. Each datagram re-arms the detector for
-WAKE_HOLD_SECONDS.
+Keeps a sliding window (the length the model is trained on: 5 s at 16 kHz for the
+drone_audio_detector model), scores it every hop (default 0.5 s) and sends a UDP
+wake datagram whenever the score crosses the threshold. Each datagram re-arms the
+detector for WAKE_HOLD_SECONDS.
 
     python -m demo.raspberry.audio_wake.main --verbose            # live microphone
     python -m demo.raspberry.audio_wake.main --wav clip.wav       # replay a file (testing)
@@ -153,11 +153,20 @@ def main() -> int:
         # STM32 board over the ST-LINK USB serial port: "stm32" or "stm32:/dev/ttyACM1"
         from demo.raspberry.audio_wake.stm32_mic import Stm32Microphone
 
-        if rate != Stm32Microphone.sample_rate:
-            print(f"The STM32 streams {Stm32Microphone.sample_rate} Hz but the model needs {rate} Hz.")
-            return 1
         port = str(args.device).partition(":")[2] or config.STM32_MIC_PORT
-        stream = Stm32Microphone(chunks.put, port=port, baud=config.STM32_MIC_BAUD)
+        target_rate = rate
+
+        def _push_stm32(block: np.ndarray) -> None:
+            data = np.asarray(block, dtype=np.float32).reshape(-1)
+            if Stm32Microphone.sample_rate != target_rate:
+                x_old = np.arange(data.size, dtype=np.float32)
+                x_new = np.arange(
+                    0, data.size, Stm32Microphone.sample_rate / target_rate, dtype=np.float32
+                )
+                data = np.interp(x_new, x_old, data).astype(np.float32)
+            chunks.put(data)
+
+        stream = Stm32Microphone(_push_stm32, port=port, baud=config.STM32_MIC_BAUD)
         stream.start()
         source = f"STM32 microphone ({stream.port})"
     else:

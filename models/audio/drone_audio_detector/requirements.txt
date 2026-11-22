@@ -1,0 +1,4 @@
+numpy>=1.24
+onnxruntime>=1.16
+# microphone input (optional: on Linux, parecord / arecord are used if PortAudio is missing)
+sounddevice>=0.4

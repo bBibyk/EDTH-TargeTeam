@@ -175,8 +175,8 @@ Edit with `nano ~/EDTH-TargeTeam/demo/.env`, then `systemctl --user restart edth
 | `AUDIO_INPUT_FORMAT` | `stm32` | Mic = the STM32 board. `pulse` = the camera's / system mic (`AUDIO_DEVICE`) |
 | `PC_HOST` | Mac IP | Where video, sound and results are sent |
 | `AUDIO_RMS_WAKE_THRESHOLD` | `0.03` | Loudness (RMS, 0.03 = −30 dBFS) below which the model doesn't run |
-| `AUDIO_VEHICLE_PROB_THRESHOLD` | `0.5` | Model confidence that switches the camera on |
-| `VIDEO_WAKE_HOLD_SECONDS` | `10.0` | How long the camera stays on after the last detection |
+| `AUDIO_WAKE_CLASSES` / `AUDIO_WAKE_THRESHOLD` | `drone` / model default | Wake classes and score threshold for switching camera on |
+| `VIDEO_WAKE_HOLD_SECONDS` | `10.0` | How long the camera stays on after the last wake |
 | `STM32_MIC_PORT` / `STM32_MIC_BAUD` | empty / `1000000` | Board serial port (empty = auto-detect) and speed |
 
 All settings: [demo/.env.example](../demo/.env.example).

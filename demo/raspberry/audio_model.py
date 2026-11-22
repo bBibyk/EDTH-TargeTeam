@@ -1,66 +1,71 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import onnxruntime as ort
 
-SR = 32000
-WINDOW_SECONDS = 2
+SR = 16000
+WINDOW_SECONDS = 5
 WINDOW_SAMPLES = SR * WINDOW_SECONDS
-N_MELS = 128
-WIN_LENGTH = 800
-HOP_LENGTH = 320
-N_FFT = 1024
-CLASSES = ["background", "vehicle", "drone", "footsteps"]
+CLASSES = ["drone", "vehicle", "other"]
 
 
-class EfficientATAudioModel:
-    def __init__(self, model_path: str | Path, mel_basis_path: str | Path) -> None:
-        self._window = np.hanning(WIN_LENGTH).astype(np.float32)
-        self._mel_basis = np.load(str(mel_basis_path)).astype(np.float32, copy=False)
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
-        self._session = ort.InferenceSession(
-            str(model_path),
-            sess_options=options,
-            providers=["CPUExecutionProvider"],
-        )
+def _load_native(model_path: str | Path, threads: int = 1):
+    path = Path(model_path)
+    detector_root = path
+    for parent in [path, *path.parents]:
+        if (parent / "drone_audio" / "native.py").is_file():
+            detector_root = parent
+            break
+    if str(detector_root) not in sys.path:
+        sys.path.insert(0, str(detector_root))
+    from drone_audio.native import load_native_model
 
-    def _mel(self, waveform: np.ndarray) -> np.ndarray:
-        x = np.asarray(waveform, dtype=np.float32)
-        if x.shape[0] != WINDOW_SAMPLES:
-            raise ValueError(f"Expected {WINDOW_SAMPLES} samples, got {x.shape[0]}")
-        x = x[1:] - np.float32(0.97) * x[:-1]
-        x = np.pad(x, (N_FFT // 2, N_FFT // 2), mode="reflect")
-        frames = np.lib.stride_tricks.sliding_window_view(x, N_FFT)[::HOP_LENGTH]
-        padded_window = np.zeros(N_FFT, dtype=np.float32)
-        start = (N_FFT - WIN_LENGTH) // 2
-        padded_window[start : start + WIN_LENGTH] = self._window
-        frames = frames * padded_window[None, :]
-        spectrum = np.fft.rfft(frames, n=N_FFT, axis=1)
-        power = (spectrum.real * spectrum.real + spectrum.imag * spectrum.imag).astype(
-            np.float32
-        )
-        power = power.T
-        melspec = self._mel_basis @ power
-        melspec = np.log(melspec + np.float32(1e-5))
-        melspec = (melspec + np.float32(4.5)) / np.float32(5.0)
-        return melspec[np.newaxis, np.newaxis, :, :].astype(np.float32)
+    model_dir = path
+    if (path / "model.json").is_file():
+        model_dir = path
+    elif (path.parent / "model.json").is_file():
+        model_dir = path.parent
+    return load_native_model(model_dir, threads=threads)
+
+
+class DroneAudioModel:
+    """Adapter around drone_audio_detector/native.py with the legacy predict() dict contract."""
+
+    sample_rate = SR
+    window_seconds = WINDOW_SECONDS
+    window_samples = WINDOW_SAMPLES
+    classes = tuple(CLASSES)
+
+    def __init__(
+        self, model_path: str | Path, mel_basis_path: str | Path | None = None, threads: int = 1
+    ) -> None:
+        self._model = _load_native(model_path, threads=threads)
+        self.threshold = float(getattr(self._model, "thr", 0.5))
+        self.name = Path(model_path).name
 
     def predict(self, waveform: np.ndarray) -> dict[str, Any]:
-        mel = self._mel(waveform)
-        logits = self._session.run(["logits"], {"mel": mel})[0][0]
-        x = np.asarray(logits, dtype=np.float32)
-        x = x - np.max(x)
-        exp_x = np.exp(x)
-        probs = exp_x / np.sum(exp_x)
-        index = int(np.argmax(probs))
+        x = np.asarray(waveform, dtype=np.float32).reshape(-1)
+        if x.shape[0] != WINDOW_SAMPLES:
+            if x.shape[0] > WINDOW_SAMPLES:
+                x = x[-WINDOW_SAMPLES:]
+            else:
+                x = np.pad(x, (0, WINDOW_SAMPLES - x.shape[0]))
+        p_drone, p3 = self._model(x)
+        p3 = np.asarray(p3, dtype=np.float32).reshape(-1)
+        probs = {name: float(p3[i]) for i, name in enumerate(CLASSES)}
+        index = int(np.argmax(p3))
         return {
             "class": CLASSES[index],
             "class_index": index,
-            "probabilities": {name: float(probs[i]) for i, name in enumerate(CLASSES)},
-            "vehicle_probability": float(probs[CLASSES.index("vehicle")]),
+            "probabilities": probs,
+            "drone_probability": float(p_drone),
+            "vehicle_probability": float(probs["vehicle"]),
+            "wake": bool(float(p_drone) >= self.threshold),
         }
+
+
+# Backward-compatible name used by older imports.
+EfficientATAudioModel = DroneAudioModel

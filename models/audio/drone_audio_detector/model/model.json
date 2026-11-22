@@ -1,0 +1,16 @@
+{
+ "type": "finetuned",
+ "arch": "ced_small",
+ "frontend": "ced_mel64",
+ "net": "ced_small_ft.onnx",
+ "input": "logmel",
+ "output": "probs",
+ "classes": [
+  "drone",
+  "vehicle",
+  "other"
+ ],
+ "thr": 0.5088782012462616,
+ "best_epoch": 26,
+ "val_auc": 0.9951249620772264
+}

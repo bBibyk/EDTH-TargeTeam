@@ -90,15 +90,16 @@ WAKE_PORT = _env_int("WAKE_PORT", 9300)
 # How long the detector stays awake after the last wake signal.
 WAKE_HOLD_SECONDS = _env_float("WAKE_HOLD_SECONDS", 10.0)
 
-# Model for run_audio_wake.sh: a folder with .onnx + mel_basis.npy (EfficientAT) or a single .onnx.
+# Model for run_audio_wake.sh: a drone_audio_detector model dir (model.json + onnx),
+# or a legacy EfficientAT folder (.onnx + mel_basis.npy) / single .onnx.
 # AUDIO_MODEL_PATH is the older name of the same setting and is still accepted.
 AUDIO_WAKE_MODEL_PATH = Path(
     os.getenv("AUDIO_WAKE_MODEL_PATH")
     or os.getenv("AUDIO_MODEL_PATH")
-    or str(MODELS_DIR / "audio" / "raspberry_pi")
+    or str(MODELS_DIR / "audio" / "drone_audio_detector" / "model")
 )
 AUDIO_MODEL_PATH = AUDIO_WAKE_MODEL_PATH  # old name, kept for compatibility
-# Which classes of the EfficientAT model count as "wake" (probabilities are summed).
+# Which classes count as "wake" (probabilities are summed). New model: drone/vehicle/other.
 AUDIO_WAKE_CLASSES = tuple(
     c.strip() for c in os.getenv("AUDIO_WAKE_CLASSES", "drone").split(",") if c.strip()
 )
@@ -108,7 +109,7 @@ STM32_MIC_PORT = os.getenv("STM32_MIC_PORT", "") or None  # empty -> auto (ST-LI
 STM32_MIC_BAUD = _env_int("STM32_MIC_BAUD", 1_000_000)
 AUDIO_WAKE_WINDOW_SECONDS = _env_float("AUDIO_WAKE_WINDOW_SECONDS", 5.0)
 AUDIO_WAKE_HOP_SECONDS = _env_float("AUDIO_WAKE_HOP_SECONDS", 0.5)
-# Empty -> use the threshold stored in the ONNX metadata (or 0.5).
+# Empty -> use the threshold stored in the model (or 0.5).
 AUDIO_WAKE_THRESHOLD = os.getenv("AUDIO_WAKE_THRESHOLD", "")
 AUDIO_WAKE_THREADS = _env_int("AUDIO_WAKE_THREADS", 2)
 
@@ -121,18 +122,15 @@ if not YOLO_MODEL_PATH.is_absolute():
 AUDIO_EVENT_MODEL_PATH = Path(
     os.getenv(
         "AUDIO_EVENT_MODEL_PATH",
-        str(MODELS_DIR / "audio" / "raspberry_pi" / "efficientat_audio_v1.onnx"),
+        str(MODELS_DIR / "audio" / "drone_audio_detector" / "model"),
     )
 )
 if not AUDIO_EVENT_MODEL_PATH.is_absolute():
     AUDIO_EVENT_MODEL_PATH = ROOT_DIR / AUDIO_EVENT_MODEL_PATH
 AUDIO_EVENT_MEL_BASIS_PATH = Path(
-    os.getenv(
-        "AUDIO_EVENT_MEL_BASIS_PATH",
-        str(MODELS_DIR / "audio" / "raspberry_pi" / "mel_basis.npy"),
-    )
-)
-if not AUDIO_EVENT_MEL_BASIS_PATH.is_absolute():
+    os.getenv("AUDIO_EVENT_MEL_BASIS_PATH", "")
+)  # legacy EfficientAT mel basis; unused by drone_audio_detector models
+if AUDIO_EVENT_MEL_BASIS_PATH and not AUDIO_EVENT_MEL_BASIS_PATH.is_absolute():
     AUDIO_EVENT_MEL_BASIS_PATH = ROOT_DIR / AUDIO_EVENT_MEL_BASIS_PATH
 
 # The model only runs when the last audio chunk is louder than this RMS (0.03 = -30 dBFS).
